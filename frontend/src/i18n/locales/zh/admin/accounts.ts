@@ -737,6 +737,8 @@ export default {
         oauthPassthrough: '自动透传（仅替换认证）',
         excelBPS: 'Excel / BPS 协议',
         excelBPSCacheCreationAsInput: '创建缓存按普通输入计费',
+        excelBPSMihomo: 'BPS 会话固定 Mihomo 出口',
+        excelBPSMihomoDesc: '默认关闭。同一会话持续使用同一代理节点，不同会话按负载分配；需要客户端提供会话标识。节点失效时拒绝请求，不换节点、不回退直连。空闲 30 分钟释放绑定，服务重启后重新分配。动态 IP 供应商须支持粘性出口。关闭后恢复账号原代理。',
         excelBPSAutoDisableOn403: '遇到 BPS 403 错误时自动关闭协议',
         excelBPSAutoDisableOn403Desc: '默认关闭. 勾选后, 当 Excel / BPS 上游返回 HTTP 403 且错误为 basispoints_upstream_error 时, 自动关闭此账号的 Excel / BPS 协议. 不禁用账号, 不重试当前请求. 模型权限错误不触发, 403 也不代表已确认封禁.',
         excelBPSCacheCreationAsInputDesc: '默认关闭. 勾选后, BPS 缓存创建 token 计入普通输入并按输入价格计费, 返回下游的缓存创建用量同步归零. 总输入和缓存读取不变, 不影响上游实际缓存.',

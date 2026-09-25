@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/mihomo"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/service/basispoints"
@@ -193,6 +194,17 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 	proxyURL := ""
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
+	}
+	if account.IsExcelBPSMihomoEnabled() {
+		if identity == "" {
+			return fail(400, "basispoints_session_required", "BPS session proxy requires a session_id, thread identity or prompt_cache_key")
+		}
+		var release func()
+		proxyURL, release, err = mihomo.AcquireBPSSession(ctx, scope)
+		if err != nil {
+			return fail(503, "basispoints_proxy_unavailable", "BPS session proxy is unavailable; check managed proxy, session capacity and bound node")
+		}
+		defer release()
 	}
 	SetActualOpenAIUpstreamEndpoint(c, "/basispoints/api/responses")
 	SetOpsUpstreamModel(c, model)
