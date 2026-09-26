@@ -25,9 +25,11 @@ import (
 
 type bpsTestLease struct{ releases, failures int }
 
-func (l *bpsTestLease) Release()             { l.releases++ }
-func (l *bpsTestLease) ReportFailure()       { l.failures++ }
-func (l *bpsTestLease) ReportStreamFailure() { l.failures++ }
+func (l *bpsTestLease) Release()               { l.releases++ }
+func (l *bpsTestLease) ReportFailure()         { l.failures++ }
+func (l *bpsTestLease) ReportStreamFailure()   { l.failures++ }
+func (l *bpsTestLease) ReportSuccess()         {}
+func (l *bpsTestLease) ReportUpstreamFailure() { l.failures++ }
 
 type bpsTestUpstream struct {
 	httpUpstreamRecorder

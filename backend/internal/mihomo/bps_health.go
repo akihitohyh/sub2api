@@ -27,6 +27,8 @@ const (
 )
 
 type bpsNodeHealth struct {
+	modelQuality      bpsQualityRate
+	connectQuality    bpsQualityRate
 	verifiedUntil     time.Time
 	retryAfter        time.Time
 	failures          int
@@ -55,7 +57,11 @@ func (l *BPSLease) ReportFailure() {
 	l.failureOnce.Do(func() {
 		l.manager.bpsMu.Lock()
 		defer l.manager.bpsMu.Unlock()
-		l.manager.bpsFailureLocked(l.node, time.Now())
+		now := time.Now()
+		h := l.manager.bpsHealthLocked(l.node)
+		h.modelQuality.observe(false, now)
+		h.connectQuality.observe(false, now)
+		l.manager.bpsFailureLocked(l.node, now)
 	})
 }
 
@@ -65,7 +71,9 @@ func (l *BPSLease) ReportStreamFailure() {
 	l.failureOnce.Do(func() {
 		l.manager.bpsMu.Lock()
 		defer l.manager.bpsMu.Unlock()
-		l.manager.bpsStreamFailureLocked(l.node, time.Now())
+		now := time.Now()
+		l.manager.bpsHealthLocked(l.node).modelQuality.observe(false, now)
+		l.manager.bpsStreamFailureLocked(l.node, now)
 	})
 }
 
@@ -166,6 +174,20 @@ func (m *Manager) acquireBPSLease(ctx context.Context, scope string, excluded ma
 					zap.String("session_hash", key[:16]),
 					zap.String("previous_node_hash", previousNode[:min(16, len(previousNode))]),
 					zap.String("node_hash", node[:min(16, len(node))]), zap.String("local_proxy", proxy))
+			}
+			if previousNode != node {
+				m.bpsMu.Lock()
+				health := m.bpsHealthLocked(node)
+				now := time.Now()
+				modelRate, connectRate := health.modelQuality.rate(now), health.connectQuality.rate(now)
+				_, modelSamples := health.modelQuality.decayed(now)
+				_, connectSamples := health.connectQuality.decayed(now)
+				m.bpsMu.Unlock()
+				logger.FromContext(ctx).Info("excel_bps.proxy_selected",
+					zap.String("session_hash", key[:16]), zap.String("node_hash", node[:min(16, len(node))]),
+					zap.String("local_proxy", proxy), zap.Float64("request_success_rate", modelRate),
+					zap.Float64("connectivity_rate", connectRate), zap.Float64("request_samples", modelSamples),
+					zap.Float64("connectivity_samples", connectSamples))
 			}
 			return lease, nil
 		}
@@ -287,6 +309,7 @@ func (m *Manager) checkBPSHealth(ctx context.Context, node, proxy string) error 
 			probe = probeBPSHTTPS
 		}
 		successes, failures := 0, 0
+		probeResults := make([]bool, 0, 3)
 		needed := 1
 		if recovering {
 			needed = 2
@@ -301,6 +324,7 @@ func (m *Manager) checkBPSHealth(ctx context.Context, node, proxy string) error 
 			if ctx.Err() != nil {
 				break
 			}
+			probeResults = append(probeResults, probeErr == nil)
 			if probeErr != nil {
 				failures++
 				logger.FromContext(ctx).Warn("excel_bps.proxy_probe_failed",
@@ -322,6 +346,11 @@ func (m *Manager) checkBPSHealth(ctx context.Context, node, proxy string) error 
 		h.probing = nil
 		canceled := ctx.Err() != nil
 		stale := revision != h.revision
+		if !canceled {
+			for _, success := range probeResults {
+				h.connectQuality.observe(success, time.Now())
+			}
+		}
 		if !canceled && !stale {
 			if probeErr == nil && successes >= needed {
 				h.failures = 0

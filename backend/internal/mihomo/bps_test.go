@@ -69,6 +69,9 @@ func TestBPSSessionsConcurrentAndSticky(t *testing.T) {
 func TestBPSSessionsDistribute200Sessions(t *testing.T) {
 	m := bpsTestManager(t)
 	var wg sync.WaitGroup
+	var allocated sync.WaitGroup
+	allocated.Add(200)
+	releaseAll := make(chan struct{})
 	var mu sync.Mutex
 	counts := map[string]int{}
 	for i := 0; i < 200; i++ {
@@ -78,14 +81,19 @@ func TestBPSSessionsDistribute200Sessions(t *testing.T) {
 			p, done, err := AcquireBPSSession(context.Background(), fmt.Sprintf("account:1/key:2/thread:%d", i))
 			if err != nil {
 				t.Error(err)
+				allocated.Done()
 				return
 			}
 			defer done()
 			mu.Lock()
 			counts[p]++
 			mu.Unlock()
+			allocated.Done()
+			<-releaseAll
 		}(i)
 	}
+	allocated.Wait()
+	close(releaseAll)
 	wg.Wait()
 	require.Len(t, m.bpsSessions, 200)
 	require.Len(t, counts, 2)

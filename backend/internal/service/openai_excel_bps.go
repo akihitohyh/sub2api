@@ -211,6 +211,9 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if lease != nil && resp.StatusCode >= 500 && ctx.Err() == nil {
+			lease.ReportUpstreamFailure()
+		}
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512<<10))
 		if resp.StatusCode == http.StatusTooManyRequests && s.rateLimitService != nil {
 			stateCtx, cancel := openAIAccountStateContext(ctx)
@@ -299,6 +302,9 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 			}
 			switch kind {
 			case "response.completed", "response.failed", "response.incomplete", "error":
+				if kind == "response.completed" && lease != nil {
+					lease.ReportSuccess()
+				}
 				terminal = kind
 				completed = []byte(gjson.GetBytes(payload, "response").Raw)
 				result.ResponseID = gjson.GetBytes(payload, "response.id").String()

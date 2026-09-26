@@ -118,12 +118,14 @@ func (m *Manager) acquireBPSSessionExcluding(scope string, now time.Time, exclud
 		m.bpsSessions = make(map[string]*bpsSession)
 	}
 	loads := make(map[string]int)
+	activeLoads := make(map[string]int)
 	for k, b := range m.bpsSessions {
 		if b.active == 0 && now.Sub(b.lastUsed) >= bpsSessionIdleTTL {
 			delete(m.bpsSessions, k)
 			continue
 		}
 		loads[b.node]++
+		activeLoads[b.node] += b.active
 	}
 	binding := m.bpsSessions[key]
 	if binding != nil && (!eligible[binding.node] || binding.failed) {
@@ -140,12 +142,14 @@ func (m *Manager) acquireBPSSessionExcluding(scope string, now time.Time, exclud
 			return "", nil, errors.New("BPS session capacity exceeded")
 		}
 		node := ""
+		bestScore := -1.0
 		for id := range eligible {
 			if _, ok := m.bpsPorts[id]; !ok {
 				continue
 			}
-			if node == "" || loads[id] < loads[node] || (loads[id] == loads[node] && id < node) {
-				node = id
+			score := m.bpsQualityScoreLocked(id, activeLoads[id], loads[id], now)
+			if node == "" || score > bestScore || (score == bestScore && id < node) {
+				node, bestScore = id, score
 			}
 		}
 		if node == "" {

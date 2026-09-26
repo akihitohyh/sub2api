@@ -29,6 +29,8 @@ type excelBPSLease interface {
 	Release()
 	ReportFailure()
 	ReportStreamFailure()
+	ReportSuccess()
+	ReportUpstreamFailure()
 }
 
 type excelBPSAcquire func(context.Context, string, ...string) (string, excelBPSLease, error)
