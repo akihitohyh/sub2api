@@ -619,6 +619,8 @@ export default {
         oauthPassthrough: 'Auto passthrough (auth only)',
         excelBPS: 'Excel / BPS protocol',
         excelBPSCacheCreationAsInput: 'Bill cache creation as regular input',
+        excelBPSMihomo: 'BPS session proxy with automatic failover',
+        excelBPSMihomoDesc: 'Disabled by default. Configure and start the Mihomo pool first; explicit session identities keep a sticky exit. Requests without an identity use an isolated temporary binding, released when the request ends. New sessions rank nodes by recent completion rate, connectivity and load; healthy sessions keep their exit. The first broken stream triggers a 5-minute cooldown, increasing to 30 minutes for repeated failures. Unhealthy exits are probed and cooled down; affected sessions switch after in-flight requests finish. One extra attempt is allowed only before the request was sent. No direct fallback. Idle bindings expire after 30 minutes and reset on restart. Dynamic IP providers must support sticky exits. Turning this off restores the account proxy.',
         excelBPSAutoDisableOn403: 'Automatically disable BPS on a 403 error',
         excelBPSAutoMoveOn403: 'Automatically change groups on a BPS 403 error',
         excelBPSAutoMoveOn403Desc: 'Disabled by default. Uses the same trigger as disabling BPS; both options work independently or together. Move to the selected group and leave all other groups, or leave every group. The account stays enabled and the request is not retried. Invalid destinations or changed settings leave memberships unchanged.',

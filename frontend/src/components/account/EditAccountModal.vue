@@ -1813,6 +1813,14 @@
         </div>
         <div v-if="excelBPSEnabled" class="mt-3">
           <label class="flex items-center gap-2">
+            <input v-model="excelBPSMihomo" type="checkbox" data-testid="excel-bps-mihomo"
+              class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500" />
+            <span class="text-sm">{{ t('admin.accounts.openai.excelBPSMihomo') }}</span>
+          </label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.openai.excelBPSMihomoDesc') }}</p>
+        </div>
+        <div v-if="excelBPSEnabled" class="mt-3">
+          <label class="flex items-center gap-2">
             <input v-model="excelBPSCacheCreationAsInput" type="checkbox"
               data-testid="excel-bps-cache-creation-as-input"
               class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500" />
@@ -3830,6 +3838,7 @@ const customBaseUrl = ref('')
 const excelBPSEnabled = ref(false)
 const excelBPSAllModels = ref(false)
 const excelBPSModels = ref<string[]>(['gpt-6-astra'])
+const excelBPSMihomo = ref(false)
 const excelBPSCacheCreationAsInput = ref(false)
 const excelBPSAutoDisableOn403 = ref(false)
 const excelBPSAutoMoveOn403 = ref(false)
@@ -4336,6 +4345,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   excelBPSEnabled.value = false
   excelBPSAllModels.value = false
   excelBPSModels.value = ['gpt-6-astra']
+  excelBPSMihomo.value = false
   excelBPSCacheCreationAsInput.value = false
   excelBPSAutoDisableOn403.value = false
   excelBPSAutoMoveOn403.value = false
@@ -4366,6 +4376,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         ? extra.openai_excel_bps_models.filter((model): model is string => typeof model === 'string')
         : []
     }
+    excelBPSMihomo.value = newAccount.type === 'oauth' && extra?.openai_excel_bps_mihomo === true
     excelBPSCacheCreationAsInput.value = excelBPSEnabled.value && extra?.openai_excel_bps_cache_creation_as_input === true
     excelBPSAutoDisableOn403.value = newAccount.type === 'oauth' && extra?.openai_excel_bps_auto_disable_on_403 === true
     excelBPSAutoMoveOn403.value = newAccount.type === 'oauth' && extra?.openai_excel_bps_auto_move_on_403 === true
@@ -5867,6 +5878,11 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.openai_excel_bps
         delete newExtra.openai_excel_bps_models
+      }
+      if (newExtra.openai_excel_bps === true && excelBPSMihomo.value) {
+        newExtra.openai_excel_bps_mihomo = true
+      } else {
+        delete newExtra.openai_excel_bps_mihomo
       }
       if (newExtra.openai_excel_bps === true && excelBPSCacheCreationAsInput.value) {
         newExtra.openai_excel_bps_cache_creation_as_input = true
