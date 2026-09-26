@@ -225,6 +225,12 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 	if err != nil {
 		return fail(503, "basispoints_image_settings_unavailable", "Excel BPS image settings are unavailable")
 	}
+	if !imageSettings.Enabled && account.IsExcelBPSIgnoreImagesEnabled() {
+		body, err = basispoints.StripInputImages(body)
+		if err != nil {
+			return fail(400, "basispoints_request_invalid", err.Error())
+		}
+	}
 	var images *basispoints.NativeImages
 	if imageSettings.Enabled && imageSettings.Mode == ExcelBPSImageModeNative {
 		images, err = basispoints.PrepareNativeImagesWithLimit(body, imageSettings.Limits.MaxImages)

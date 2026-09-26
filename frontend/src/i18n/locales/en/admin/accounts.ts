@@ -618,6 +618,8 @@ export default {
         apiKeyHint: 'Your OpenAI API Key',
         oauthPassthrough: 'Auto passthrough (auth only)',
         excelBPS: 'Excel / BPS protocol',
+        excelBPSIgnoreImages: 'Ignore image inputs when image support is disabled',
+        excelBPSIgnoreImagesDesc: 'Disabled by default. Only applies while Excel / BPS image support is off in system settings. Removes all images from current and historical messages and tool results before forwarding, preserving text and tool call pairing so old screenshots cannot repeatedly block the conversation. Image-only content becomes an omission notice; the model cannot see omitted images. Enabling image support restores normal image handling.',
         excelBPSCacheCreationAsInput: 'Bill cache creation as regular input',
         excelBPSMihomo: 'BPS session proxy with automatic failover',
         excelBPSProxySource: 'Exit source',

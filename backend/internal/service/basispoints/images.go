@@ -1,10 +1,60 @@
 package basispoints
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
 )
+
+// StripInputImages removes image parts from expanded message/tool history before
+// validation or attachment handling. Do not traverse tool arguments, schemas or
+// text: image-shaped application data there is not a Responses image input.
+func StripInputImages(raw []byte) ([]byte, error) {
+	var source object
+	if err := decode(raw, &source); err != nil || source == nil {
+		return nil, fmt.Errorf("invalid Basispoints request JSON")
+	}
+	input, _ := source["input"].([]any)
+	changed := false
+	for _, rawItem := range input {
+		item, _ := rawItem.(object)
+		field := "content"
+		switch text(item["type"]) {
+		case "", "message":
+		case "function_call_output", "custom_tool_call_output":
+			field = "output"
+		default:
+			continue
+		}
+		parts, ok := item[field].([]any)
+		if !ok {
+			continue
+		}
+		kept := make([]any, 0, len(parts))
+		for _, rawPart := range parts {
+			part, _ := rawPart.(object)
+			if text(part["type"]) != "input_image" {
+				kept = append(kept, rawPart)
+			}
+		}
+		if len(kept) == len(parts) {
+			continue
+		}
+		// Preserve image-only messages and tool results with a truthful marker.
+		// Empty content can be rejected upstream; dropping a tool result breaks
+		// its call_id pairing and prevents the conversation from continuing.
+		if len(kept) == 0 {
+			kept = append(kept, object{"type": "input_text", "text": "[Image omitted because Excel / BPS image support is disabled.]"})
+		}
+		item[field] = kept
+		changed = true
+	}
+	if !changed {
+		return raw, nil
+	}
+	return json.Marshal(source)
+}
 
 // Accept HTTPS URLs or validated native attachment references.
 func validateImage(part object) error {
