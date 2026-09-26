@@ -736,6 +736,8 @@ export default {
         apiKeyHint: '您的 OpenAI API Key',
         oauthPassthrough: '自动透传（仅替换认证）',
         excelBPS: 'Excel / BPS 协议',
+        excelBPSIgnoreImages: '图片支持关闭时忽略图片输入',
+        excelBPSIgnoreImagesDesc: '默认关闭。仅在系统设置中的 Excel / BPS 图片支持关闭时生效：转发前移除当前及历史消息、工具结果中的所有图片，保留文本和工具调用关系，避免历史截图反复报错导致会话无法继续。仅含图片的内容会替换为已忽略提示；模型无法看到被忽略的图片。重新开启图片支持后恢复正常图片处理。',
         excelBPSCacheCreationAsInput: '创建缓存按普通输入计费',
         excelBPSMihomo: 'BPS 会话代理（故障自动换出口）',
         excelBPSProxySource: '出口来源',
