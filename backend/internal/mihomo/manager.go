@@ -89,6 +89,8 @@ type Manager struct {
 	bpsMu       sync.Mutex
 	bpsPorts    map[string]int
 	bpsSessions map[string]*bpsSession
+	bpsHealth   map[string]*bpsNodeHealth
+	bpsProbe    func(context.Context, string) error // isolated tests only
 
 	countryLookupURL     string // test-only override; administrators cannot change the lookup target
 	controllerURL        string // optional override for isolated controller tests

@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/mihomo"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/service/basispoints"
@@ -119,7 +118,11 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 		if committed {
 			writeOpenAICompactSSEFailureMessage(c, status, code, message)
 		} else {
-			c.JSON(status, gin.H{"error": gin.H{"type": "invalid_request_error", "code": code, "message": message}})
+			errorType := "invalid_request_error"
+			if status >= 500 {
+				errorType = "server_error"
+			}
+			c.JSON(status, gin.H{"error": gin.H{"type": errorType, "code": code, "message": message}})
 		}
 		return nil, fmt.Errorf("excel BPS: %s", code)
 	}
@@ -187,32 +190,22 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 		return fail(400, "basispoints_account_id_missing", "Excel BPS requires chatgpt_account_id")
 	}
 	requestCtx := WithHTTPUpstreamRedirectsDisabled(WithHTTPUpstreamProfile(ctx, HTTPUpstreamProfileLongStream))
-	req, err := newExcelBPSRequest(requestCtx, upstreamBody, token, accountID)
-	if err != nil {
-		return nil, err
-	}
-	proxyURL := ""
-	if account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
-	}
-	if account.IsExcelBPSMihomoEnabled() {
-		if identity == "" {
-			return fail(400, "basispoints_session_required", "BPS session proxy requires a session_id, thread identity or prompt_cache_key")
-		}
-		var release func()
-		proxyURL, release, err = mihomo.AcquireBPSSession(ctx, scope)
-		if err != nil {
-			return fail(503, "basispoints_proxy_unavailable", "BPS session proxy is unavailable; check managed proxy, session capacity and bound node")
-		}
-		defer release()
+	if account.IsExcelBPSMihomoEnabled() && identity == "" {
+		return fail(400, "basispoints_session_required", "BPS session proxy requires a session_id, thread identity or prompt_cache_key")
 	}
 	SetActualOpenAIUpstreamEndpoint(c, "/basispoints/api/responses")
 	SetOpsUpstreamModel(c, model)
 	sent := time.Now()
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	resp, lease, proxyURL, err := s.doExcelBPSRequest(requestCtx, c, account, scope, upstreamBody, token, accountID, acquireExcelBPSProxy)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(sent).Milliseconds())
 	if err != nil {
-		return fail(502, "basispoints_transport_error", "Excel BPS connection failed; request was not replayed")
+		if errors.Is(err, errExcelBPSProxyUnavailable) {
+			return fail(503, "basispoints_proxy_unavailable", "No healthy BPS session proxy is available; retry later")
+		}
+		return fail(502, "basispoints_transport_error", "Excel BPS connection failed; request was not replayed after sending")
+	}
+	if lease != nil {
+		defer lease.Release()
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -328,12 +321,19 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 			result.ClientDisconnect = true
 			return result, ctx.Err()
 		}
+		// Do not replay an incomplete response. Mark the exit for the next
+		// request only; a client cancellation never penalizes the node.
+		if lease != nil {
+			lease.ReportFailure()
+		}
+		recordExcelBPSTransportFailure(ctx, c, account, scope, proxyURL, err, "stream", 0, false)
+		MarkOpsStreamError(c, "basispoints_stream_incomplete", "Excel BPS stream ended before completion", http.StatusBadGateway)
 		MarkResponseCommitted(c)
 		if stream {
-			_, _ = c.Writer.WriteString("event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"basispoints_stream_incomplete\",\"message\":\"Upstream stream ended before completion\"}}}\n\n")
+			_, _ = c.Writer.WriteString("event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"type\":\"server_error\",\"code\":\"basispoints_stream_incomplete\",\"message\":\"Upstream stream ended before completion\"}}}\n\n")
 			c.Writer.Flush()
 		} else {
-			c.JSON(502, gin.H{"error": gin.H{"code": "basispoints_stream_incomplete", "message": "Excel BPS stream ended before completion"}})
+			c.JSON(502, gin.H{"error": gin.H{"type": "server_error", "code": "basispoints_stream_incomplete", "message": "Excel BPS stream ended before completion"}})
 		}
 		return result, fmt.Errorf("excel BPS stream incomplete")
 	}

@@ -93,6 +93,8 @@ func TestCollectionWithOfficialKernel(t *testing.T) {
 	require.Equal(t, n2, fetch(p2))
 	require.Equal(t, n1, fetch(p1))
 	require.NoError(t, c.Close())
+	// The simulated upstream only serves local HTTP, not public TLS.
+	m.bpsProbe = func(context.Context, string) error { return nil }
 	// BPS binds sessions to immutable node listeners, independent of harvest use-once.
 	bps1, done1, err := AcquireBPSSession(ctx, "account:1/thread:first")
 	require.NoError(t, err)

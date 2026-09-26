@@ -19,6 +19,7 @@ const bpsSessionIdleTTL = 30 * time.Minute
 type bpsSession struct {
 	node     string // digest of the complete outbound definition, not its display name
 	active   int
+	failed   bool
 	lastUsed time.Time
 }
 
@@ -81,10 +82,18 @@ func AcquireBPSSession(ctx context.Context, scope string) (string, func(), error
 	if m == nil {
 		return "", nil, errors.New("managed Mihomo is not running")
 	}
-	return m.acquireBPSSession(scope, time.Now())
+	lease, err := m.acquireBPSLease(ctx, scope, nil)
+	if err != nil {
+		return "", nil, err
+	}
+	return lease.ProxyURL, lease.Release, nil
 }
 
 func (m *Manager) acquireBPSSession(scope string, now time.Time) (string, func(), error) {
+	return m.acquireBPSSessionExcluding(scope, now, nil)
+}
+
+func (m *Manager) acquireBPSSessionExcluding(scope string, now time.Time, excluded map[string]bool) (string, func(), error) {
 	digest := sha256.Sum256([]byte(scope))
 	key := hex.EncodeToString(digest[:])
 	m.bpsMu.Lock()
@@ -96,8 +105,9 @@ func (m *Manager) acquireBPSSession(scope string, now time.Time) (string, func()
 	eligible := make(map[string]bool)
 	for _, n := range snapshot.Nodes {
 		name, _ := n["name"].(string)
-		if bpsEligible(snapshot, name) {
-			eligible[harvestDigest(n)] = true
+		id := harvestDigest(n)
+		if bpsEligible(snapshot, name) && !excluded[id] && !m.bpsCoolingLocked(id, now) {
+			eligible[id] = true
 		}
 	}
 	m.mu.Unlock()
@@ -116,8 +126,14 @@ func (m *Manager) acquireBPSSession(scope string, now time.Time) (string, func()
 		loads[b.node]++
 	}
 	binding := m.bpsSessions[key]
-	if binding != nil && !eligible[binding.node] {
-		return "", nil, errors.New("bound BPS node unavailable")
+	if binding != nil && (!eligible[binding.node] || binding.failed) {
+		// Keep in-flight requests on their original exit. Rebind only after
+		// the last response closes; late reports cannot poison a new binding.
+		if binding.active > 0 {
+			return "", nil, errors.New("bound BPS node unavailable while requests are active")
+		}
+		delete(m.bpsSessions, key)
+		binding = nil
 	}
 	if binding == nil {
 		if len(m.bpsSessions) >= bpsMaxSessions {

@@ -16,6 +16,7 @@ func bpsTestManager(t *testing.T) *Manager {
 	m := New(t.TempDir())
 	t.Cleanup(m.Close)
 	m.state.Running = true
+	m.bpsProbe = func(context.Context, string) error { return nil }
 	m.saved = saved{UseOnce: true, Nodes: []map[string]any{{"name": "one"}, {"name": "two"}}, Disabled: map[string]string{"one": "used"}}
 	_, err := m.config(m.saved)
 	require.NoError(t, err)
@@ -93,7 +94,7 @@ func TestBPSSessionsDistribute200Sessions(t *testing.T) {
 	}
 }
 
-func TestBPSSessionUnavailableNodeNeverRebinds(t *testing.T) {
+func TestBPSSessionUnavailableNodeRebinds(t *testing.T) {
 	m := bpsTestManager(t)
 	proxy, done, err := AcquireBPSSession(context.Background(), "a")
 	require.NoError(t, err)
@@ -109,8 +110,10 @@ func TestBPSSessionUnavailableNodeNeverRebinds(t *testing.T) {
 			m.saved.Disabled[name] = "failed"
 		}
 	}
-	_, _, err = AcquireBPSSession(context.Background(), "a")
-	require.ErrorContains(t, err, "bound BPS node unavailable")
+	replacement, release, err := AcquireBPSSession(context.Background(), "a")
+	require.NoError(t, err)
+	require.NotEqual(t, proxy, replacement)
+	release()
 	// Disabled listeners explicitly reject; no port can be reused for a new node.
 	before := m.bpsPorts[selected]
 	m.saved.Nodes = append(m.saved.Nodes, map[string]any{"name": "new"})
@@ -134,8 +137,10 @@ func TestBPSSessionUnavailableNodeNeverRebinds(t *testing.T) {
 	}
 	require.True(t, found)
 	require.Equal(t, fmt.Sprintf("http://127.0.0.1:%d", before), proxy)
-	_, _, err = AcquireBPSSession(context.Background(), "a")
-	require.Error(t, err)
+	again, release, err := AcquireBPSSession(context.Background(), "a")
+	require.NoError(t, err)
+	require.Equal(t, replacement, again)
+	release()
 }
 
 func TestBPSSessionIdleExpiryAndCapacity(t *testing.T) {
@@ -157,7 +162,7 @@ func TestBPSSessionIdleExpiryAndCapacity(t *testing.T) {
 	require.ErrorContains(t, err, "capacity")
 }
 
-func TestBPSSessionCountryAndIdentityChangesFailClosed(t *testing.T) {
+func TestBPSSessionCountryFilterAndIdentityChanges(t *testing.T) {
 	m := bpsTestManager(t)
 	m.saved.CountryFilter = CountryFilter{Mode: "include", Codes: []string{"US"}}
 	_, _, err := AcquireBPSSession(context.Background(), "a")
@@ -171,6 +176,7 @@ func TestBPSSessionCountryAndIdentityChangesFailClosed(t *testing.T) {
 	}
 	_, err = m.config(m.saved)
 	require.NoError(t, err)
-	_, _, err = AcquireBPSSession(context.Background(), "a")
-	require.ErrorContains(t, err, "bound BPS node unavailable")
+	_, release, err := AcquireBPSSession(context.Background(), "a")
+	require.NoError(t, err)
+	release()
 }

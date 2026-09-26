@@ -1,0 +1,324 @@
+package mihomo
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"sync"
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/util/transportdiag"
+	"go.uber.org/zap"
+)
+
+const (
+	bpsHealthTTL          = 30 * time.Second
+	bpsFailureCooldown    = time.Minute
+	bpsProbeTimeout       = 5 * time.Second
+	bpsMaxCandidateProbes = 3
+)
+
+type bpsNodeHealth struct {
+	verifiedUntil time.Time
+	retryAfter    time.Time
+	failures      int
+	revision      uint64
+	probing       chan struct{}
+}
+
+// BPSLease keeps the selected exit alive until the response body closes.
+// It contains no supplier credentials. Reports always refer to this exit,
+// even if a later request has rebound the same session.
+type BPSLease struct {
+	ProxyURL    string
+	manager     *Manager
+	node        string
+	release     func()
+	failureOnce sync.Once
+}
+
+func (l *BPSLease) Release() { l.release() }
+
+// ReportFailure invalidates cached reachability and the affected bindings.
+// Callers must exclude cancellations and application-level HTTP errors.
+func (l *BPSLease) ReportFailure() {
+	l.failureOnce.Do(func() {
+		l.manager.bpsMu.Lock()
+		defer l.manager.bpsMu.Unlock()
+		l.manager.bpsFailureLocked(l.node, time.Now())
+	})
+}
+
+// AcquireBPSLease probes only HTTPS reachability, never model inference.
+// Excluded local proxy URLs prevent retrying an already failed request exit.
+func AcquireBPSLease(ctx context.Context, scope string, excludedProxyURLs ...string) (*BPSLease, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if scope == "" {
+		return nil, errors.New("BPS session identity required")
+	}
+	m := managedManager()
+	if m == nil {
+		return nil, errors.New("managed Mihomo is not running")
+	}
+	excluded := make(map[string]bool)
+	m.bpsMu.Lock()
+	for id, port := range m.bpsPorts {
+		for _, proxy := range excludedProxyURLs {
+			if proxy == fmt.Sprintf("http://127.0.0.1:%d", port) {
+				excluded[id] = true
+			}
+		}
+	}
+	m.bpsMu.Unlock()
+	return m.acquireBPSLease(ctx, scope, excluded)
+}
+
+func (m *Manager) acquireBPSLease(ctx context.Context, scope string, excluded map[string]bool) (*BPSLease, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	digest := sha256.Sum256([]byte(scope))
+	key := hex.EncodeToString(digest[:])
+	m.bpsMu.Lock()
+	previousNode := ""
+	if binding := m.bpsSessions[key]; binding != nil {
+		previousNode = binding.node
+	}
+	m.bpsMu.Unlock()
+
+	if excluded == nil {
+		excluded = make(map[string]bool)
+	}
+	for attempt := 0; attempt < bpsMaxCandidateProbes; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		proxy, release, err := m.acquireBPSSessionExcluding(scope, time.Now(), excluded)
+		if err != nil {
+			return nil, err
+		}
+		m.bpsMu.Lock()
+		var node string
+		for id, port := range m.bpsPorts {
+			if proxy == fmt.Sprintf("http://127.0.0.1:%d", port) {
+				node = id
+				break
+			}
+		}
+		m.bpsMu.Unlock()
+		lease := &BPSLease{ProxyURL: proxy, manager: m, node: node, release: release}
+		if err := m.checkBPSHealth(ctx, node, proxy); err == nil && m.bpsNodeStillEligible(node) {
+			if previousNode != "" && previousNode != node {
+				logger.FromContext(ctx).Info("excel_bps.proxy_rebound",
+					zap.String("session_hash", key[:16]),
+					zap.String("previous_node_hash", previousNode[:min(16, len(previousNode))]),
+					zap.String("node_hash", node[:min(16, len(node))]), zap.String("local_proxy", proxy))
+			}
+			return lease, nil
+		}
+		release()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		excluded[node] = true
+	}
+	return nil, errors.New("BPS proxy reachability checks exhausted")
+}
+
+// Recheck policy after network I/O: an administrator may change the pool or
+// country filter while the probe is running.
+func (m *Manager) bpsNodeStillEligible(node string) bool {
+	m.bpsMu.Lock()
+	defer m.bpsMu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	h := m.bpsHealth[node]
+	if m.closed || !m.state.Running || h == nil || !time.Now().Before(h.verifiedUntil) || m.bpsCoolingLocked(node, time.Now()) {
+		return false
+	}
+	for _, n := range m.saved.Nodes {
+		name, _ := n["name"].(string)
+		if harvestDigest(n) == node {
+			return bpsEligible(m.saved, name)
+		}
+	}
+	return false
+}
+
+func (m *Manager) bpsHealthLocked(node string) *bpsNodeHealth {
+	if m.bpsHealth == nil {
+		m.bpsHealth = make(map[string]*bpsNodeHealth)
+	}
+	h := m.bpsHealth[node]
+	if h == nil {
+		h = &bpsNodeHealth{}
+		m.bpsHealth[node] = h
+	}
+	return h
+}
+
+func (m *Manager) bpsCoolingLocked(node string, now time.Time) bool {
+	h := m.bpsHealth[node]
+	return h != nil && now.Before(h.retryAfter)
+}
+
+func (m *Manager) bpsFailureLocked(node string, now time.Time) {
+	h := m.bpsHealthLocked(node)
+	h.failures++
+	h.revision++
+	h.verifiedUntil = time.Time{}
+	if h.failures >= 2 {
+		h.retryAfter = now.Add(bpsFailureCooldown)
+	}
+	for _, binding := range m.bpsSessions {
+		if binding.node == node {
+			binding.failed = true
+		}
+	}
+}
+
+// Single-flight by node: hundreds of sessions must not launch hundreds of
+// probes. No manager locks are held during I/O. Cancellation is not node failure.
+func (m *Manager) checkBPSHealth(ctx context.Context, node, proxy string) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		m.bpsMu.Lock()
+		h := m.bpsHealthLocked(node)
+		now := time.Now()
+		if now.Before(h.retryAfter) {
+			m.bpsMu.Unlock()
+			return errors.New("BPS node is cooling down")
+		}
+		if now.Before(h.verifiedUntil) {
+			m.bpsMu.Unlock()
+			return nil
+		}
+		if pending := h.probing; pending != nil {
+			m.bpsMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-pending:
+				continue
+			}
+		}
+		pending := make(chan struct{})
+		h.probing = pending
+		revision := h.revision
+		recovering := h.failures > 0
+		m.bpsMu.Unlock()
+
+		probe := m.bpsProbe
+		if probe == nil {
+			probe = probeBPSHTTPS
+		}
+		successes, failures := 0, 0
+		needed := 1
+		if recovering {
+			needed = 2
+		}
+		var probeErr error
+		// Confirm a first probe failure before cooldown; recovery always requires
+		// two consecutive successes. Three network calls is the hard upper bound.
+		for n := 0; n < 3; n++ {
+			probeCtx, cancel := context.WithTimeout(ctx, bpsProbeTimeout)
+			probeErr = probe(probeCtx, proxy)
+			cancel()
+			if ctx.Err() != nil {
+				break
+			}
+			if probeErr != nil {
+				failures++
+				logger.FromContext(ctx).Warn("excel_bps.proxy_probe_failed",
+					zap.String("node_hash", node[:min(16, len(node))]), zap.String("local_proxy", proxy), zap.String("error_kind", transportdiag.Classify(probeErr)),
+					zap.String("error_type", fmt.Sprintf("%T", probeErr)))
+				successes = 0
+				needed = 2
+				if failures >= 2 || recovering {
+					break
+				}
+			} else {
+				successes++
+				if successes >= needed {
+					break
+				}
+			}
+		}
+		m.bpsMu.Lock()
+		h.probing = nil
+		canceled := ctx.Err() != nil
+		stale := revision != h.revision
+		if !canceled && !stale {
+			if probeErr == nil && successes >= needed {
+				h.failures = 0
+				h.retryAfter = time.Time{}
+				h.verifiedUntil = time.Now().Add(bpsHealthTTL)
+			} else {
+				for n := 0; n < failures; n++ {
+					m.bpsFailureLocked(node, time.Now())
+				}
+				if failures == 0 {
+					m.bpsFailureLocked(node, time.Now())
+				}
+			}
+		}
+		close(pending)
+		m.bpsMu.Unlock()
+		if canceled {
+			return ctx.Err()
+		}
+		if stale {
+			return errors.New("BPS node failed during reachability check")
+		}
+		if probeErr != nil || successes < needed {
+			return errors.New("BPS proxy HTTPS reachability failed")
+		}
+		return nil
+	}
+}
+
+func probeBPSHTTPS(ctx context.Context, proxy string) error {
+	client, err := newBPSProbeClient(proxy)
+	if err != nil {
+		return err
+	}
+	defer client.CloseIdleConnections()
+	return probeBPSHTTPSClient(ctx, client)
+}
+
+func newBPSProbeClient(proxy string) (*http.Client, error) {
+	parsed, err := url.Parse(proxy)
+	if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" || parsed.User != nil {
+		return nil, errors.New("invalid BPS local proxy")
+	}
+	// Always explicit proxy, verified TLS, fixed non-inference URL, no redirects
+	// and no OAuth/session headers. Never inherit a direct/environment fallback.
+	transport := &http.Transport{Proxy: http.ProxyURL(parsed), TLSHandshakeTimeout: bpsProbeTimeout, DisableKeepAlives: true}
+	client := &http.Client{Transport: transport, Timeout: bpsProbeTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return client, nil
+}
+
+func probeBPSHTTPSClient(ctx context.Context, client *http.Client) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, "https://bps.openai.com/", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	// A 404/403 from this unauthenticated root still proves tunnel/TLS reachability.
+	if resp.StatusCode == http.StatusProxyAuthRequired || resp.StatusCode >= 500 {
+		return errors.New("BPS proxy probe HTTP unavailable")
+	}
+	return nil
+}
