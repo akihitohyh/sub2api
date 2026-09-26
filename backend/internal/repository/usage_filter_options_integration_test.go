@@ -15,8 +15,11 @@ import (
 
 func TestOwnUsageFilterOptionsIsolation(t *testing.T) {
 	ctx := context.Background()
-	client := testEntClient(t)
-	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
+	// Keep every row in a rolled-back transaction. Committed usage logs would
+	// leak into the database-wide dashboard totals asserted by UsageLogRepoSuite.
+	tx := testEntTx(t)
+	client := tx.Client()
+	repo := newUsageLogRepositoryWithSQL(client, tx)
 	suffix := uuid.NewString()
 	owner := mustCreateUser(t, client, &service.User{Email: "observer-" + suffix + "@test.com"})
 	other := mustCreateUser(t, client, &service.User{Email: "other-" + suffix + "@test.com"})
@@ -41,11 +44,12 @@ func TestOwnUsageFilterOptionsIsolation(t *testing.T) {
 		_, err := repo.Create(ctx, row)
 		require.NoError(t, err)
 	}
-	ops := NewOpsRepository(integrationDB)
-	_, err := ops.InsertErrorLog(ctx, &service.OpsInsertErrorLogInput{
+	// Same statement as opsRepository.InsertErrorLog, which only accepts *sql.DB
+	// and therefore cannot join the test transaction.
+	_, err := tx.ExecContext(ctx, insertOpsErrorLogSQL, opsInsertErrorLogArgs(&service.OpsInsertErrorLogInput{
 		UserID: &owner.ID, APIKeyID: &key.ID, AccountID: &failed.ID, GroupID: &ownGroup.ID, StatusCode: 502, CreatedAt: time.Now(),
 		ErrorPhase: "request", ErrorType: "api_error", Severity: "P1", ErrorSource: "gateway", ErrorOwner: "provider",
-	})
+	})...)
 	require.NoError(t, err)
 	for _, kind := range []string{"api_key", "account", "group"} {
 		items, err := repo.OwnUsageFilterOptions(ctx, owner.ID, kind, "", false)
