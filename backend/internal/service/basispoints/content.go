@@ -2,14 +2,25 @@ package basispoints
 
 import "fmt"
 
-func validateHistoryContent(value any, inputIndex int, field string) error {
+func (b *Bridge) validateHistoryContent(value any, inputIndex int, field string) error {
 	content, _ := value.([]any)
 	for index, rawPart := range content {
 		part, _ := rawPart.(object)
 		switch text(part["type"]) {
 		case "input_text", "output_text", "text", "refusal":
 		case "input_image":
-			if err := validateImage(part); err != nil {
+			var err error
+			if field == "output" && b.nativeToolImages[text(part["image_url"])] {
+				// Only this request's fully validated tool screenshots may remain inline.
+				if _, exists := part["file_id"]; exists {
+					err = fmt.Errorf("basispoints input_image requires exactly one image reference")
+				} else {
+					err = validateImageDetail(part)
+				}
+			} else {
+				err = validateImage(part)
+			}
+			if err != nil {
 				return fmt.Errorf("%w (path=input[%d].%s[%d])", err, inputIndex, field, index)
 			}
 		case "encrypted_content":
