@@ -475,3 +475,18 @@ func TestReprepareKeepsValidatedCatalogDuringAttachmentUpload(t *testing.T) {
 		t.Fatal("upload overwrote newer session catalog")
 	}
 }
+
+func TestRawCommandCompatibilityDoesNotBypassOrdinarySchema(t *testing.T) {
+	source := testSource()
+	spec := functionCmdTestTool("exec_command")
+	params := mustTestValue[object](t, spec["parameters"])
+	params["additionalProperties"] = false
+	source["tools"] = []any{spec}
+	_, b := mustPrepare(t, source, "scope", nil)
+	if _, err := b.translateCall(nativeCall(object{"name": "exec_command", "arguments": object{"cmd": "pwd", "undeclared": true}})); err == nil {
+		t.Fatal("ordinary command envelope bypassed schema")
+	}
+	if _, err := b.translateCall(functionCmdTestNative(t, "exec_command", "pwd", "{\"undeclared\":true}")); err != nil {
+		t.Fatal(err)
+	}
+}
