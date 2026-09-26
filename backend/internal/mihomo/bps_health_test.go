@@ -246,6 +246,7 @@ func TestBPSHealthFailedRecoveryStaysQuarantined(t *testing.T) {
 	lease.ReportFailure()
 	lease.Release()
 	h := m.bpsHealth[lease.node]
+	h.retryAfter = time.Now().Add(-time.Second)
 	calls := 0
 	m.bpsProbe = func(context.Context, string) error {
 		calls++

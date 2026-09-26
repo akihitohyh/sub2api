@@ -133,7 +133,7 @@ func (m *Manager) acquireBPSSessionExcluding(scope string, now time.Time, exclud
 		}
 		m.mu.Unlock()
 		if !ready {
-			return "", nil, errors.New("managed Mihomo is not running")
+			return "", nil, bpsSelectionError("manager_unavailable", "managed Mihomo is not running")
 		}
 	}
 	if m.bpsSessions == nil {
@@ -156,14 +156,14 @@ func (m *Manager) acquireBPSSessionExcluding(scope string, now time.Time, exclud
 		// Keep in-flight requests on their original exit. Rebind only after
 		// the last response closes; late reports cannot poison a new binding.
 		if binding.active > 0 {
-			return "", nil, errors.New("bound BPS node unavailable while requests are active")
+			return "", nil, bpsSelectionError("session_draining", "bound BPS node unavailable while requests are active")
 		}
 		delete(m.bpsSessions, key)
 		binding = nil
 	}
 	if binding == nil {
 		if len(m.bpsSessions) >= bpsMaxSessions {
-			return "", nil, errors.New("BPS session capacity exceeded")
+			return "", nil, bpsSelectionError("session_capacity", "BPS session capacity exceeded")
 		}
 		node := ""
 		bestScore := -1.0
@@ -181,7 +181,7 @@ func (m *Manager) acquireBPSSessionExcluding(scope string, now time.Time, exclud
 			}
 		}
 		if node == "" {
-			return "", nil, errors.New("no eligible BPS proxy nodes")
+			return "", nil, bpsSelectionError("no_eligible_nodes", "no eligible BPS proxy nodes")
 		}
 		binding = &bpsSession{node: node, generation: m.bpsHealthAtLocked(node, now).generation}
 		m.bpsSessions[key] = binding
@@ -190,13 +190,13 @@ func (m *Manager) acquireBPSSessionExcluding(scope string, now time.Time, exclud
 	if m.bpsStaticMode {
 		staticURL, ok := m.bpsStatic[binding.node]
 		if !ok {
-			return "", nil, errors.New("bound BPS proxy unavailable")
+			return "", nil, bpsSelectionError("listener_unavailable", "bound BPS proxy unavailable")
 		}
 		target = staticURL
 	} else {
 		port, ok := m.bpsPorts[binding.node]
 		if !ok {
-			return "", nil, errors.New("bound BPS listener unavailable")
+			return "", nil, bpsSelectionError("listener_unavailable", "bound BPS listener unavailable")
 		}
 		target = fmt.Sprintf("http://127.0.0.1:%d", port)
 	}
