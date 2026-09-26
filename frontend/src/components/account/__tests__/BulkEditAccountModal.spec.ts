@@ -139,6 +139,22 @@ describe('BulkEditAccountModal', () => {
         extra: {
           openai_excel_bps: true,
           openai_excel_bps_models: ['gpt-6-astra'],
+          openai_excel_bps_mihomo: false,
+          openai_excel_bps_cache_creation_as_input: false
+        }
+      })
+    })
+
+    it('saves the session proxy opt-in in bulk', async () => {
+      const wrapper = mountModal(oauthProps)
+      await enableBPS(wrapper)
+      await wrapper.get('[data-testid="excel-bps-mihomo"]').setValue(true)
+      await submit(wrapper)
+      expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+        extra: {
+          openai_excel_bps: true,
+          openai_excel_bps_models: ['gpt-6-astra'],
+          openai_excel_bps_mihomo: true,
           openai_excel_bps_cache_creation_as_input: false
         }
       })
@@ -155,6 +171,7 @@ describe('BulkEditAccountModal', () => {
         extra: {
           openai_excel_bps: true,
           openai_excel_bps_models: ['gpt-6-sol', 'gpt-6-astra'],
+          openai_excel_bps_mihomo: false,
           openai_excel_bps_cache_creation_as_input: true
         }
       })
@@ -171,6 +188,7 @@ describe('BulkEditAccountModal', () => {
         extra: {
           openai_excel_bps: true,
           openai_excel_bps_models: allModels ? null : [],
+          openai_excel_bps_mihomo: false,
           openai_excel_bps_cache_creation_as_input: false
         }
       })
@@ -196,6 +214,7 @@ describe('BulkEditAccountModal', () => {
         extra: {
           openai_excel_bps: false,
           openai_excel_bps_models: null,
+          openai_excel_bps_mihomo: false,
           openai_excel_bps_cache_creation_as_input: false
         }
       })
@@ -243,6 +262,7 @@ describe('BulkEditAccountModal', () => {
         extra: {
           openai_excel_bps: true,
           openai_excel_bps_models: ['gpt-6-astra'],
+          openai_excel_bps_mihomo: false,
           openai_excel_bps_cache_creation_as_input: false
         }
       })

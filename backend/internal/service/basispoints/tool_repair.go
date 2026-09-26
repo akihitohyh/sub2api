@@ -75,6 +75,10 @@ func (b *Bridge) translateCompleted(ctx context.Context, response object, repair
 	if validation == nil {
 		return b.translateResponse(response)
 	}
+	var schemaError toolArgumentsSchemaError
+	if errors.As(validation, &schemaError) {
+		return validation
+	}
 	original, eligible := repairableTools(response)
 	if repair == nil || !eligible || b.structured != nil {
 		return validation
@@ -106,6 +110,10 @@ func (b *Bridge) translateCompleted(ctx context.Context, response object, repair
 		}
 		validation = b.validateToolResponse(corrected)
 		if validation == nil {
+			items, err = b.restoreRawToolPayloads(original, items)
+			if err != nil {
+				return err
+			}
 			if !b.preservesToolOperations(original, items) {
 				return fmt.Errorf("basispoints tool transport correction changed an operation; no tool was executed")
 			}
@@ -125,6 +133,52 @@ func (b *Bridge) translateCompleted(ctx context.Context, response object, repair
 		failed = corrected
 	}
 	return fmt.Errorf("basispoints tool transport remains invalid after %d corrections; no tool was executed: %w", maxToolRepairs, validation)
+}
+
+// A correction chooses a declared raw transport, not replacement source text.
+// Bind its code field to the original bytes before checking the whole batch.
+// Valid operations and named JSON envelopes are never rebound.
+// Clone corrected calls so replay records exactly what the client receives,
+// without rewriting the model response used by the continuation.
+func (b *Bridge) restoreRawToolPayloads(original, corrected []object) ([]object, error) {
+	check := *b
+	check.replay = nil
+	result := append([]object(nil), corrected...)
+	for i, native := range original {
+		if _, err := check.translateCall(native); err == nil {
+			continue
+		}
+		code, ok := transportArguments(native)["code"].(string)
+		if !ok {
+			continue
+		}
+		if envelope, err := decodeTransportEnvelope(code); err == nil {
+			if name, nameErr := envelopeName(envelope); nameErr == nil && name != "" {
+				continue
+			}
+		}
+		args := transportArguments(corrected[i])
+		summary := text(args["summary"])
+		if (!strings.HasPrefix(summary, customTransportPrefix) && !strings.HasPrefix(summary, functionCodeTransportPrefix) && !strings.HasPrefix(summary, functionCmdTransportPrefix)) || args["code"] == code {
+			continue
+		}
+		boundArgs := make(object, len(args))
+		for key, value := range args {
+			boundArgs[key] = value
+		}
+		boundArgs["code"] = code
+		encoded, err := json.Marshal(boundArgs)
+		if err != nil {
+			return nil, fmt.Errorf("basispoints cannot bind the original tool payload: %w", err)
+		}
+		bound := make(object, len(corrected[i]))
+		for key, value := range corrected[i] {
+			bound[key] = value
+		}
+		bound["arguments"] = string(encoded)
+		result[i] = bound
+	}
+	return result, nil
 }
 
 // Valid calls in a mixed batch must retain their exact client operation. For
@@ -169,7 +223,11 @@ func (b *Bridge) preservesToolOperations(original, corrected []object) bool {
 			}
 		} else {
 			var payload object
-			if decode([]byte(text(after["arguments"])), &payload) != nil || payload["code"] != code {
+			field := "code"
+			if strings.HasPrefix(text(transportArguments(corrected[i])["summary"]), functionCmdTransportPrefix) {
+				field = "cmd"
+			}
+			if decode([]byte(text(after["arguments"])), &payload) != nil || payload[field] != code {
 				return false
 			}
 		}
@@ -187,7 +245,7 @@ func transportArguments(native object) object {
 }
 
 func transportTarget(args object) string {
-	for _, prefix := range []string{customTransportPrefix, functionCodeTransportPrefix} {
+	for _, prefix := range []string{customTransportPrefix, functionCodeTransportPrefix, functionCmdTransportPrefix} {
 		if summary := text(args["summary"]); strings.HasPrefix(summary, prefix) {
 			return strings.TrimPrefix(summary, prefix)
 		}
