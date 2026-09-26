@@ -110,6 +110,7 @@ func TestExcelBPSIgnoreImagesHTTPFlow(t *testing.T) {
 				for _, ignore := range []string{"", "false"} {
 					result := send(history, ignore, "", http.StatusBadRequest)
 					require.Contains(t, result, "image support is disabled")
+					require.Contains(t, result, ExcelBPSIgnoreImagesKey, "operators must be told how to enable text-only forwarding")
 					require.NotContains(t, result, "PRIVATE_IMAGE")
 					require.Empty(t, forwarded)
 				}

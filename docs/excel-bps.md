@@ -77,6 +77,22 @@
 - 工具参数、工具定义、字符串形式的文本/工具结果和其他非图片内容不做递归删改。文件、音频、畸形请求等仍沿用原来的协议校验，不能通过此选项绕过。
 - 未勾选时保留原有图片校验行为；非 BPS 请求不受影响。开关不改变客户端保存的历史，请求体大小限制也仍然生效。
 
+**部署代码不等于开启选项。** 已有账号不会自动启用；保存后重新打开账号编辑确认勾选状态。一个 API Key 的分组若包含多个可调度的 BPS 账号，应在需要此行为的各个账号上分别开启，或使用批量编辑。向模型发送“忽略图片”的文字不能代替账号设置，因为校验失败发生在请求到达模型之前。
+
+### 真实入口 E2E
+
+`backend/scripts/e2e-bps-ignore-images.py` 通过配置的网关 API Key 进入真实鉴权、账号调度、最新账号配置读取和 BPS 上游，不向服务内部注入开关。设置环境变量 `BPS_E2E_BASE_URL`（包含 `/v1`）、`BPS_E2E_API_KEY`，以及可选的 `BPS_E2E_MODEL`。脚本不会修改账号设置。
+
+```text
+# 在专用测试账号/分组中，先保持全局图片支持关闭、账号忽略选项关闭：
+python backend/scripts/e2e-bps-ignore-images.py --expect reject
+# 在后台开启实际会被该 API Key 调度到的账号的忽略图片选项，再运行：
+python backend/scripts/e2e-bps-ignore-images.py --expect ignore
+python backend/scripts/e2e-bps-ignore-images.py --expect ignore --stream --output-index 1032 --image-chars 3107598
+```
+
+脚本使用无效 base64 占位内容模拟截图，绝不解码或展示图片；验证开启后收到了真实上游的指定文本及成功终态，而不只检查 HTTP 200。最后一条命令复现长历史中的 `input[1032].output[1]` 和约 3 MB 的图片字段。成功探测会消耗所选上游的实际 token，不建议对生产账号自动定时运行。
+
 ## Base64 图片原生上传
 
 在管理员后台的 **系统设置 > 功能开关 > Excel / BPS 图片支持** 中启用图片支持，并将图片传输方式设为 **BPS 原生附件上传** 后保存。原有开关和容量限制继续生效；未配置传输方式时仍使用原来的 HTTPS 中转。原生模式不要求填写公网图片地址，不会自动切换已有部署。
