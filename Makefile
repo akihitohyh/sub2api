@@ -14,6 +14,7 @@ FRONTEND_CRITICAL_VITEST := \
 	src/components/account/__tests__/ExcelBPS403Badge.spec.ts \
 	src/components/keys/__tests__/BulkEditKeysModal.spec.ts \
 	src/components/admin/user/__tests__/UserPlatformQuotaModal.spec.ts \
+	src/components/admin/user/__tests__/UserEditModal.spec.ts \
 	src/views/user/__tests__/KeysView.spec.ts \
 	src/api/__tests__/channelMonitorV2.spec.ts \
 	src/views/auth/__tests__/LinuxDoCallbackView.spec.ts \
