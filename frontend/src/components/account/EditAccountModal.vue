@@ -3316,7 +3316,7 @@ import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiErro
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { getAccountExpiryTimestamp } from '@/components/account/accountExpiry'
 import { allSelectedGroupsEnableLongContextPricing } from '@/components/account/longContextBilling'
-import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
+import { DEFAULT_EXCEL_BPS_MODELS, VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
   OPENAI_WS_MODE_CTX_POOL,
   OPENAI_WS_MODE_OFF,
@@ -3837,7 +3837,7 @@ const customBaseUrl = ref('')
 // OpenAI 自动透传开关（OAuth/API Key）
 const excelBPSEnabled = ref(false)
 const excelBPSAllModels = ref(false)
-const excelBPSModels = ref<string[]>(['gpt-6-astra'])
+const excelBPSModels = ref<string[]>([...DEFAULT_EXCEL_BPS_MODELS])
 const excelBPSMihomo = ref(false)
 const excelBPSCacheCreationAsInput = ref(false)
 const excelBPSAutoDisableOn403 = ref(false)
@@ -4344,7 +4344,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   // Load OpenAI passthrough toggle (OpenAI OAuth/SetupToken/API Key)
   excelBPSEnabled.value = false
   excelBPSAllModels.value = false
-  excelBPSModels.value = ['gpt-6-astra']
+  excelBPSModels.value = [...DEFAULT_EXCEL_BPS_MODELS]
   excelBPSMihomo.value = false
   excelBPSCacheCreationAsInput.value = false
   excelBPSAutoDisableOn403.value = false
