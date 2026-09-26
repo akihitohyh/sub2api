@@ -293,7 +293,10 @@ func TestNativeToolImageValidationAndScope(t *testing.T) {
 	} {
 		var modified object
 		require.NoError(t, json.Unmarshal(raw, &modified))
-		part := modified["input"].([]any)[1].(map[string]any)["output"].([]any)[0].(map[string]any)
+		items := mustTestValue[[]any](t, modified["input"])
+		item := mustTestValue[object](t, items[1])
+		parts := mustTestValue[[]any](t, item["output"])
+		part := mustTestValue[object](t, parts[0])
 		change(part)
 		invalid, err := json.Marshal(modified)
 		require.NoError(t, err)
@@ -307,7 +310,7 @@ func TestNativeToolImageValidationAndScope(t *testing.T) {
 	messageRaw := nativeTestRequest(t, url)
 	_, _, err = bridge.Reprepare(messageRaw)
 	require.Error(t, err)
-	source["input"] = append(source["input"].([]any), object{"role": "user", "content": []any{object{"type": "input_image", "image_url": url}}})
+	source["input"] = append(mustTestValue[[]any](t, source["input"]), object{"role": "user", "content": []any{object{"type": "input_image", "image_url": url}}})
 	mixed, err := json.Marshal(source)
 	require.NoError(t, err)
 	_, err = PrepareNativeImagesWithLimit(mixed, 1)
