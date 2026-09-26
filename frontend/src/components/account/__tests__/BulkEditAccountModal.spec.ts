@@ -115,6 +115,7 @@ describe('BulkEditAccountModal', () => {
       openai_excel_bps: true,
       openai_excel_bps_models: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra'],
       openai_excel_bps_mihomo: false,
+      openai_excel_bps_proxy_source: 'mihomo',
       openai_excel_bps_cache_creation_as_input: false,
       openai_excel_bps_auto_disable_on_403: false,
       openai_excel_bps_auto_move_on_403: false,
@@ -172,6 +173,22 @@ describe('BulkEditAccountModal', () => {
         extra: {
           ...defaultExtra,
           openai_excel_bps_mihomo: true
+        }
+      })
+    })
+
+    it('saves the IP management pool as the session proxy source in bulk', async () => {
+      const wrapper = mountModal(oauthProps)
+      await enableBPS(wrapper)
+      expect(wrapper.find('[data-testid="bulk-excel-bps-proxy-source-ip-pool"]').exists()).toBe(false)
+      await wrapper.get('[data-testid="excel-bps-mihomo"]').setValue(true)
+      await wrapper.get('[data-testid="bulk-excel-bps-proxy-source-ip-pool"]').setValue(true)
+      await submit(wrapper)
+      expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+        extra: {
+          ...defaultExtra,
+          openai_excel_bps_mihomo: true,
+          openai_excel_bps_proxy_source: 'ip_pool'
         }
       })
     })

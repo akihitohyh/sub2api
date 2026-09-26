@@ -267,14 +267,16 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 	if accountID == "" {
 		return fail(400, "basispoints_account_id_missing", "Excel BPS requires chatgpt_account_id")
 	}
-	requestAcquire := acquireExcelBPSProxy
+	requestAcquire := s.excelBPSAcquireFor(account)
 	attachmentProxy := ""
 	if account.Proxy != nil {
 		attachmentProxy = account.Proxy.URL()
 	}
 	if images != nil && images.HasImages() && account.IsExcelBPSMihomoEnabled() {
 		var lease excelBPSLease
-		attachmentProxy, lease, err = acquireExcelBPSProxy(ctx, scope)
+		// Pin the attachment upload and the Responses request to the same exit,
+		// whichever pool the account chose.
+		attachmentProxy, lease, err = requestAcquire(ctx, scope)
 		if err != nil {
 			return fail(503, "basispoints_proxy_unavailable", "No healthy BPS session proxy is available; retry later")
 		}
