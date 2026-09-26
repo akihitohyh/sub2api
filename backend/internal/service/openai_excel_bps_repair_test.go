@@ -40,9 +40,9 @@ func (u *excelBPSRepairUpstream) Do(req *http.Request, proxy string, accountID i
 	return u.httpUpstreamRecorder.Do(req, proxy, accountID, concurrency)
 }
 
-func excelBPSRepairWire(t *testing.T, id, summary string) string {
+func excelBPSRepairWire(t *testing.T, id, summary, code string) string {
 	t.Helper()
-	args, err := json.Marshal(map[string]any{"summary": summary, "code": "text(42);", "extended_summary": "{}", "references": []any{}, "destructive": false})
+	args, err := json.Marshal(map[string]any{"summary": summary, "code": code, "extended_summary": "{}", "references": []any{}, "destructive": false})
 	require.NoError(t, err)
 	event, err := json.Marshal(map[string]any{"type": "response.completed", "response": map[string]any{
 		"id": "resp_" + id, "status": "completed", "model": "gpt-5.6-sol", "usage": map[string]int{"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
@@ -65,10 +65,12 @@ func TestExcelBPSToolCorrectionPreservesRouteAndUsage(t *testing.T) {
 				}
 				for i := 0; i < attempts; i++ {
 					summary := "Run client tool"
+					code := "text(42);"
 					if corrected && i == attempts-1 {
 						summary = "codex2api.custom/functions.exec"
+						code = "text(24);"
 					}
-					body := &excelBPSRepairBody{Reader: strings.NewReader(excelBPSRepairWire(t, fmt.Sprint(i), summary))}
+					body := &excelBPSRepairBody{Reader: strings.NewReader(excelBPSRepairWire(t, fmt.Sprint(i), summary, code))}
 					checked.bodies = append(checked.bodies, body)
 					upstream.responses = append(upstream.responses, &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: body})
 				}
@@ -85,6 +87,7 @@ func TestExcelBPSToolCorrectionPreservesRouteAndUsage(t *testing.T) {
 					require.NoError(t, err)
 					require.NotContains(t, rec.Body.String(), "response.failed")
 					require.Contains(t, rec.Body.String(), `"input":"text(42);"`)
+					require.NotContains(t, rec.Body.String(), "text(24);")
 					require.Contains(t, rec.Body.String(), `"name":"exec"`)
 					if stream {
 						require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.output_item.added"))
@@ -124,7 +127,7 @@ func TestExcelBPSToolCorrectionPreservesRouteAndUsage(t *testing.T) {
 func TestExcelBPSToolCorrectionStopsOnHTTPRejection(t *testing.T) {
 	for _, status := range []int{403, 429, 500} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
-			first := &excelBPSRepairBody{Reader: strings.NewReader(excelBPSRepairWire(t, "http_rejection", "Run"))}
+			first := &excelBPSRepairBody{Reader: strings.NewReader(excelBPSRepairWire(t, "http_rejection", "Run", "text(42);"))}
 			rejected := &excelBPSRepairBody{Reader: strings.NewReader(`{"error":{"message":"private echoed request text"}}`)}
 			upstream := &httpUpstreamRecorder{responses: []*http.Response{
 				{StatusCode: 200, Header: http.Header{}, Body: first},
@@ -144,6 +147,44 @@ func TestExcelBPSToolCorrectionStopsOnHTTPRejection(t *testing.T) {
 			require.Contains(t, rec.Body.String(), fmt.Sprintf("HTTP %d", status))
 			require.NotContains(t, rec.Body.String(), "private echoed")
 			require.NotContains(t, rec.Body.String(), "response.output_item.added")
+		})
+	}
+}
+
+func TestExcelBPS429CorrectionDoesNotChangeCodexState(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+			first := &excelBPSRepairBody{Reader: strings.NewReader(excelBPSRepairWire(t, "rate_limit", "Run", "text(42);"))}
+			rejected := &excelBPSRepairBody{Reader: strings.NewReader(`{"error":{"type":"usage_limit_reached","resets_in_seconds":7200,"message":"PRIVATE_UPSTREAM"}}`)}
+			upstream := &httpUpstreamRecorder{responses: []*http.Response{
+				{StatusCode: http.StatusOK, Header: http.Header{}, Body: first},
+				{StatusCode: http.StatusTooManyRequests, Header: excelBPSQuotaHeaders("100", "100"), Body: rejected},
+			}}
+			svc := openAIClientToolsTestService(upstream)
+			repo := &excelBPSQuotaRepo{writes: make(chan excelBPSQuotaWrite, 4)}
+			svc.accountRepo = repo
+			svc.rateLimitService = NewRateLimitService(repo, nil, svc.cfg, nil, nil)
+			svc.rateLimitService.SetAccountRuntimeBlocker(svc)
+			account := excelAccount()
+			body := []byte(fmt.Sprintf(`{"model":"gpt-5.6-sol","stream":%t,"input":"test","tools":[{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"exec"}]}]}`, stream))
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+
+			result, err := svc.Forward(context.Background(), c, account, body)
+
+			require.Error(t, err)
+			var failover *UpstreamFailoverError
+			require.NotErrorAs(t, err, &failover)
+			require.Len(t, upstream.requests, 2, "stop after the throttled correction")
+			require.True(t, first.closed.Load())
+			require.True(t, rejected.closed.Load())
+			require.Equal(t, 10, result.Usage.InputTokens)
+			require.NotContains(t, rec.Body.String(), "PRIVATE_UPSTREAM")
+			require.NotContains(t, rec.Body.String(), "response.output_item.added")
+			requireNoExcelBPSQuotaWrite(t, repo)
+			require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+			require.True(t, account.IsSchedulable())
 		})
 	}
 }
