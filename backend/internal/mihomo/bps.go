@@ -17,10 +17,11 @@ const bpsMaxSessions = 4096
 const bpsSessionIdleTTL = 30 * time.Minute
 
 type bpsSession struct {
-	node     string // digest of the complete outbound definition, not its display name
-	active   int
-	failed   bool
-	lastUsed time.Time
+	node       string // digest of the complete outbound definition, not its display name
+	generation uint64 // local dynamic observation window, not a measured exit IP
+	active     int
+	failed     bool
+	lastUsed   time.Time
 }
 
 func bpsEligible(s saved, name string) bool {
@@ -36,6 +37,15 @@ func (m *Manager) bpsListeners(s saved) ([]any, error) {
 	if m.bpsPorts == nil {
 		m.bpsPorts = make(map[string]int)
 	}
+	dynamic := make(map[string]bool, len(s.DynamicProxies))
+	for _, value := range s.DynamicProxies {
+		node, err := dynamicProxyNode(value)
+		if err != nil {
+			return nil, err
+		}
+		dynamic[harvestDigest(node)] = true
+	}
+	m.bpsDynamic = dynamic
 	targets := make(map[string]string)
 	for _, n := range s.Nodes {
 		name, _ := n["name"].(string)
@@ -68,9 +78,9 @@ func (m *Manager) bpsListeners(s saved) ([]any, error) {
 	return listeners, nil
 }
 
-// AcquireBPSSession pins a scoped client session until it has been idle for the
-// TTL. Concurrent requests share the binding and hold independent references
-// through response-body closure. No harvest gate or selector is held/changed.
+// AcquireBPSSession pins a scoped client session until idle expiry or a dynamic
+// observation window expires. Concurrent requests retain the binding through
+// response-body closure. No harvest gate or selector is held/changed.
 func AcquireBPSSession(ctx context.Context, scope string) (string, func(), error) {
 	if err := ctx.Err(); err != nil {
 		return "", nil, err
@@ -106,6 +116,7 @@ func (m *Manager) acquireBPSSessionExcluding(scope string, now time.Time, exclud
 	for _, n := range snapshot.Nodes {
 		name, _ := n["name"].(string)
 		id := harvestDigest(n)
+		m.bpsHealthAtLocked(id, now)
 		if bpsEligible(snapshot, name) && !excluded[id] && !m.bpsCoolingLocked(id, now) {
 			eligible[id] = true
 		}
@@ -120,7 +131,9 @@ func (m *Manager) acquireBPSSessionExcluding(scope string, now time.Time, exclud
 	loads := make(map[string]int)
 	activeLoads := make(map[string]int)
 	for k, b := range m.bpsSessions {
-		if b.active == 0 && now.Sub(b.lastUsed) >= bpsSessionIdleTTL {
+		h := m.bpsHealthAtLocked(b.node, now)
+		expired := m.bpsDynamic[b.node] && b.generation != h.generation
+		if b.active == 0 && (expired || now.Sub(b.lastUsed) >= bpsSessionIdleTTL) {
 			delete(m.bpsSessions, k)
 			continue
 		}
@@ -155,7 +168,7 @@ func (m *Manager) acquireBPSSessionExcluding(scope string, now time.Time, exclud
 		if node == "" {
 			return "", nil, errors.New("no eligible BPS proxy nodes")
 		}
-		binding = &bpsSession{node: node}
+		binding = &bpsSession{node: node, generation: m.bpsHealthAtLocked(node, now).generation}
 		m.bpsSessions[key] = binding
 	}
 	port, ok := m.bpsPorts[binding.node]

@@ -48,9 +48,8 @@ func (r bpsQualityRate) rate(now time.Time) float64 {
 // separately and only new/rebound sessions use this ranking.
 func (m *Manager) bpsQualityScoreLocked(node string, active, sessions int, now time.Time) float64 {
 	var model, connect bpsQualityRate
-	if h := m.bpsHealth[node]; h != nil {
-		model, connect = h.modelQuality, h.connectQuality
-	}
+	h := m.bpsHealthAtLocked(node, now)
+	model, connect = h.modelQuality, h.connectQuality
 	quality := 0.7*model.rate(now) + 0.3*connect.rate(now)
 	return quality / (1 + 0.15*float64(active) + 0.02*float64(sessions))
 }
@@ -61,7 +60,10 @@ func (l *BPSLease) ReportSuccess() {
 	l.failureOnce.Do(func() {
 		l.manager.bpsMu.Lock()
 		defer l.manager.bpsMu.Unlock()
-		l.manager.bpsHealthLocked(l.node).modelQuality.observe(true, time.Now())
+		now := time.Now()
+		if h := l.feedbackHealthLocked(now); h != nil {
+			h.modelQuality.observe(true, now)
+		}
 	})
 }
 
@@ -71,6 +73,9 @@ func (l *BPSLease) ReportUpstreamFailure() {
 	l.failureOnce.Do(func() {
 		l.manager.bpsMu.Lock()
 		defer l.manager.bpsMu.Unlock()
-		l.manager.bpsHealthLocked(l.node).modelQuality.observe(false, time.Now())
+		now := time.Now()
+		if h := l.feedbackHealthLocked(now); h != nil {
+			h.modelQuality.observe(false, now)
+		}
 	})
 }

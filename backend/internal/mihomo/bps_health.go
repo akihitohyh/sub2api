@@ -27,6 +27,8 @@ const (
 )
 
 type bpsNodeHealth struct {
+	windowStarted     time.Time
+	generation        uint64
 	modelQuality      bpsQualityRate
 	connectQuality    bpsQualityRate
 	verifiedUntil     time.Time
@@ -45,6 +47,7 @@ type BPSLease struct {
 	ProxyURL    string
 	manager     *Manager
 	node        string
+	generation  uint64
 	release     func()
 	failureOnce sync.Once
 }
@@ -58,7 +61,10 @@ func (l *BPSLease) ReportFailure() {
 		l.manager.bpsMu.Lock()
 		defer l.manager.bpsMu.Unlock()
 		now := time.Now()
-		h := l.manager.bpsHealthLocked(l.node)
+		h := l.feedbackHealthLocked(now)
+		if h == nil {
+			return
+		}
 		h.modelQuality.observe(false, now)
 		h.connectQuality.observe(false, now)
 		l.manager.bpsFailureLocked(l.node, now)
@@ -72,7 +78,11 @@ func (l *BPSLease) ReportStreamFailure() {
 		l.manager.bpsMu.Lock()
 		defer l.manager.bpsMu.Unlock()
 		now := time.Now()
-		l.manager.bpsHealthLocked(l.node).modelQuality.observe(false, now)
+		h := l.feedbackHealthLocked(now)
+		if h == nil {
+			return
+		}
+		h.modelQuality.observe(false, now)
 		l.manager.bpsStreamFailureLocked(l.node, now)
 	})
 }
@@ -166,9 +176,10 @@ func (m *Manager) acquireBPSLease(ctx context.Context, scope string, excluded ma
 				break
 			}
 		}
+		generation := m.bpsHealthAtLocked(node, time.Now()).generation
 		m.bpsMu.Unlock()
-		lease := &BPSLease{ProxyURL: proxy, manager: m, node: node, release: release}
-		if err := m.checkBPSHealth(ctx, node, proxy); err == nil && m.bpsNodeStillEligible(node) {
+		lease := &BPSLease{ProxyURL: proxy, manager: m, node: node, generation: generation, release: release}
+		if err := m.checkBPSHealth(ctx, node, proxy); err == nil && m.bpsNodeStillEligible(node, generation) {
 			if previousNode != "" && previousNode != node {
 				logger.FromContext(ctx).Info("excel_bps.proxy_rebound",
 					zap.String("session_hash", key[:16]),
@@ -182,8 +193,13 @@ func (m *Manager) acquireBPSLease(ctx context.Context, scope string, excluded ma
 				modelRate, connectRate := health.modelQuality.rate(now), health.connectQuality.rate(now)
 				_, modelSamples := health.modelQuality.decayed(now)
 				_, connectSamples := health.connectQuality.decayed(now)
+				source := "subscription"
+				if m.bpsDynamic[node] {
+					source = "dynamic"
+				}
 				m.bpsMu.Unlock()
 				logger.FromContext(ctx).Info("excel_bps.proxy_selected",
+					zap.String("proxy_source", source), zap.Uint64("observation_generation", generation),
 					zap.String("session_hash", key[:16]), zap.String("node_hash", node[:min(16, len(node))]),
 					zap.String("local_proxy", proxy), zap.Float64("request_success_rate", modelRate),
 					zap.Float64("connectivity_rate", connectRate), zap.Float64("request_samples", modelSamples),
@@ -202,13 +218,14 @@ func (m *Manager) acquireBPSLease(ctx context.Context, scope string, excluded ma
 
 // Recheck policy after network I/O: an administrator may change the pool or
 // country filter while the probe is running.
-func (m *Manager) bpsNodeStillEligible(node string) bool {
+func (m *Manager) bpsNodeStillEligible(node string, generation uint64) bool {
 	m.bpsMu.Lock()
 	defer m.bpsMu.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	h := m.bpsHealth[node]
-	if m.closed || !m.state.Running || h == nil || !time.Now().Before(h.verifiedUntil) || m.bpsCoolingLocked(node, time.Now()) {
+	now := time.Now()
+	h := m.bpsHealthAtLocked(node, now)
+	if m.closed || !m.state.Running || h.generation != generation || !now.Before(h.verifiedUntil) || m.bpsCoolingLocked(node, now) {
 		return false
 	}
 	for _, n := range m.saved.Nodes {
@@ -233,12 +250,12 @@ func (m *Manager) bpsHealthLocked(node string) *bpsNodeHealth {
 }
 
 func (m *Manager) bpsCoolingLocked(node string, now time.Time) bool {
-	h := m.bpsHealth[node]
-	return h != nil && now.Before(h.retryAfter)
+	h := m.bpsHealthAtLocked(node, now)
+	return now.Before(h.retryAfter)
 }
 
 func (m *Manager) bpsFailureLocked(node string, now time.Time) {
-	h := m.bpsHealthLocked(node)
+	h := m.bpsHealthAtLocked(node, now)
 	h.failures++
 	h.revision++
 	h.verifiedUntil = time.Time{}
@@ -255,8 +272,12 @@ func (m *Manager) bpsFailureLocked(node string, now time.Time) {
 }
 
 func (m *Manager) bpsStreamFailureLocked(node string, now time.Time) {
-	h := m.bpsHealthLocked(node)
-	if now.Sub(h.lastStreamFailure) >= bpsStreamFailureWindow {
+	h := m.bpsHealthAtLocked(node, now)
+	base, maximum, window := bpsStreamCooldown, bpsStreamMaxCooldown, bpsStreamFailureWindow
+	if m.bpsDynamic[node] {
+		base, maximum, window = bpsDynamicStreamCooldown, bpsDynamicMaxCooldown, bpsDynamicWindow
+	}
+	if now.Sub(h.lastStreamFailure) >= window {
 		h.streamFailures = 0
 	}
 	// Bound the streak; repeated concurrent failures must not overflow backoff.
@@ -265,7 +286,7 @@ func (m *Manager) bpsStreamFailureLocked(node string, now time.Time) {
 	}
 	h.lastStreamFailure = now
 	m.bpsFailureLocked(node, now)
-	cooldown := min(bpsStreamCooldown<<(h.streamFailures-1), bpsStreamMaxCooldown)
+	cooldown := min(base<<(h.streamFailures-1), maximum)
 	if until := now.Add(cooldown); until.After(h.retryAfter) {
 		h.retryAfter = until
 	}
@@ -279,8 +300,8 @@ func (m *Manager) checkBPSHealth(ctx context.Context, node, proxy string) error 
 			return err
 		}
 		m.bpsMu.Lock()
-		h := m.bpsHealthLocked(node)
 		now := time.Now()
+		h := m.bpsHealthAtLocked(node, now)
 		if now.Before(h.retryAfter) {
 			m.bpsMu.Unlock()
 			return errors.New("BPS node is cooling down")
@@ -343,10 +364,11 @@ func (m *Manager) checkBPSHealth(ctx context.Context, node, proxy string) error 
 			}
 		}
 		m.bpsMu.Lock()
+		m.bpsHealthAtLocked(node, time.Now())
 		h.probing = nil
 		canceled := ctx.Err() != nil
 		stale := revision != h.revision
-		if !canceled {
+		if !canceled && !stale {
 			for _, success := range probeResults {
 				h.connectQuality.observe(success, time.Now())
 			}

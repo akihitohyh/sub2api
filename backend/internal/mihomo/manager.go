@@ -90,6 +90,7 @@ type Manager struct {
 	bpsPorts    map[string]int
 	bpsSessions map[string]*bpsSession
 	bpsHealth   map[string]*bpsNodeHealth
+	bpsDynamic  map[string]bool                     // configured dynamic outbound identities; protected by bpsMu
 	bpsProbe    func(context.Context, string) error // isolated tests only
 
 	countryLookupURL     string // test-only override; administrators cannot change the lookup target
