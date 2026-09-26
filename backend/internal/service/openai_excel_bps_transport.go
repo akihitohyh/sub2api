@@ -26,6 +26,15 @@ import (
 
 var errExcelBPSProxyUnavailable = errors.New("BPS proxy unavailable")
 
+// Keep the cause available to diagnostics without exposing a supplier URL in
+// the error string if a caller logs the returned error.
+type excelBPSAcquisitionFailure struct{ cause error }
+
+func (e *excelBPSAcquisitionFailure) Error() string { return errExcelBPSProxyUnavailable.Error() }
+func (e *excelBPSAcquisitionFailure) Unwrap() []error {
+	return []error{errExcelBPSProxyUnavailable, e.cause}
+}
+
 type excelBPSLease interface {
 	Release()
 	ReportFailure()
@@ -175,8 +184,9 @@ func (s *OpenAIGatewayService) doExcelBPSRequest(ctx context.Context, c *gin.Con
 				if ctx.Err() != nil {
 					return nil, nil, proxy, ctx.Err()
 				}
-				recordExcelBPSTransportFailure(ctx, c, account, scope, proxy, errExcelBPSProxyUnavailable, "proxy_acquisition", attempt, false)
-				return nil, nil, proxy, errExcelBPSProxyUnavailable
+				err = &excelBPSAcquisitionFailure{cause: err}
+				recordExcelBPSTransportFailure(ctx, c, account, scope, proxy, err, "proxy_acquisition", attempt, false)
+				return nil, nil, proxy, err
 			}
 		}
 		req, err := newExcelBPSRequest(ctx, body, token, accountID)
@@ -235,10 +245,16 @@ func recordExcelBPSTransportFailure(ctx context.Context, c *gin.Context, account
 	if account.IsExcelBPSMihomoEnabled() {
 		port = excelBPSLocalProxyPort(proxy)
 	}
-	detail, _ := json.Marshal(map[string]any{
+	diagnostics := map[string]any{
 		"error_kind": kind, "error_type": fmt.Sprintf("%T", err),
 		"proxy_port": port, "session_hash": sessionHash, "attempt": attempt, "retry_before_send": retry,
-	})
+	}
+	var acquisition *mihomo.BPSAcquireError
+	if errors.As(err, &acquisition) {
+		diagnostics["acquisition_reason"] = acquisition.Reason
+		diagnostics["candidates_checked"] = acquisition.Candidates
+	}
+	detail, _ := json.Marshal(diagnostics)
 	message := "Excel BPS " + stage + " failed: " + kind
 	// Keep UI client errors generic; persist only explicitly safe diagnostics.
 	if !retry {
@@ -253,7 +269,8 @@ func recordExcelBPSTransportFailure(ctx context.Context, c *gin.Context, account
 		zap.Int64("account_id", account.ID), zap.String("stage", stage),
 		zap.String("error_kind", kind), zap.String("error_type", fmt.Sprintf("%T", err)),
 		zap.Int("proxy_port", port), zap.String("session_hash", sessionHash),
-		zap.Int("attempt", attempt), zap.Bool("retry_before_send", retry))
+		zap.Int("attempt", attempt), zap.Bool("retry_before_send", retry),
+		zap.Any("acquisition_reason", diagnostics["acquisition_reason"]), zap.Any("candidates_checked", diagnostics["candidates_checked"]))
 }
 
 // Attachment requests own their lease through upload, generation and correction.
