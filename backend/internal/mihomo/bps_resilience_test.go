@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -17,13 +18,21 @@ import (
 func TestBPSHealthSlowCandidatesLeaveTimeForHealthyExit(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m := bpsTestManager(t)
-		m.saved.Nodes = append(m.saved.Nodes, map[string]any{"name": "third"})
+		for i := 0; i < bpsProbeParallelism; i++ {
+			m.saved.Nodes = append(m.saved.Nodes, map[string]any{"name": fmt.Sprintf("extra-%d", i)})
+		}
 		_, err := m.config(m.saved)
 		require.NoError(t, err)
-		seen := make(map[string]bool)
+		var mu sync.Mutex
+		seen := make(map[string]int)
 		m.bpsProbe = func(ctx context.Context, proxy string) error {
-			seen[proxy] = true
-			if len(seen) == 3 {
+			mu.Lock()
+			if seen[proxy] == 0 {
+				seen[proxy] = len(seen) + 1
+			}
+			order := seen[proxy]
+			mu.Unlock()
+			if order > bpsProbeParallelism {
 				return nil
 			}
 			<-ctx.Done()
@@ -31,22 +40,24 @@ func TestBPSHealthSlowCandidatesLeaveTimeForHealthyExit(t *testing.T) {
 		}
 		start := time.Now()
 		lease, err := m.acquireBPSLease(context.Background(), "slow-exits", nil)
-		require.NoError(t, err, "two slow candidates must leave time to reach the healthy third exit")
+		require.NoError(t, err, "a slow first wave must leave time for another healthy exit")
 		lease.Release()
-		require.Len(t, seen, 3)
-		require.Less(t, time.Since(start), 15*time.Second)
-		for node, health := range m.bpsHealth {
-			if node != lease.node {
-				require.True(t, time.Now().Before(health.retryAfter), "timed-out exits must not immediately attract another session")
+		require.Greater(t, len(seen), bpsProbeParallelism)
+		require.Less(t, time.Since(start), 8*time.Second)
+		quarantined := 0
+		for _, health := range m.bpsHealth {
+			if time.Now().Before(health.retryAfter) {
+				quarantined++
 			}
 		}
+		require.Positive(t, quarantined, "completed timeouts must not immediately attract another session")
 	})
 }
 
 func TestBPSHealthAllSlowCandidatesAreBoundedAndDiagnosed(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m := bpsTestManager(t)
-		for i := 0; i < 4; i++ {
+		for i := 0; i < bpsMaxCandidateProbes+2; i++ {
 			m.saved.Nodes = append(m.saved.Nodes, map[string]any{"name": fmt.Sprintf("extra-%d", i)})
 		}
 		_, err := m.config(m.saved)
@@ -61,10 +72,11 @@ func TestBPSHealthAllSlowCandidatesAreBoundedAndDiagnosed(t *testing.T) {
 		_, err = m.acquireBPSLease(ctx, "all-slow", nil)
 		var diagnostic *BPSAcquireError
 		require.ErrorAs(t, err, &diagnostic)
-		require.Equal(t, "candidate_checks_exhausted", diagnostic.Reason)
-		require.Equal(t, 3, diagnostic.Candidates)
-		require.Less(t, time.Since(start), 15*time.Second)
-		require.Equal(t, 3, logs.FilterMessage("excel_bps.proxy_probe_failed").Len())
+		require.Equal(t, "acquisition_timeout", diagnostic.Reason)
+		require.Greater(t, diagnostic.Candidates, bpsProbeParallelism)
+		require.LessOrEqual(t, diagnostic.Candidates, bpsMaxCandidateProbes)
+		require.Equal(t, 15*time.Second, time.Since(start))
+		require.Positive(t, logs.FilterMessage("excel_bps.proxy_probe_failed").Len())
 		for _, binding := range m.bpsSessions {
 			require.Zero(t, binding.active)
 		}

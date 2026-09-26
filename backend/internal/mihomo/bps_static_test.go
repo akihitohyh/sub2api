@@ -22,6 +22,9 @@ func TestBPSStaticPoolBindsSessionsToAdminProxies(t *testing.T) {
 	a := "http://user:secret@a.example.com:8080"
 	b := "socks5h://b.example.com:1080"
 	SetBPSStaticProxies([]string{a, " ", b, a})
+	for _, proxy := range []string{a, b} {
+		require.NoError(t, bpsStaticManager.checkBPSHealth(context.Background(), bpsStaticNodeKey(proxy), proxy))
+	}
 
 	first, err := AcquireBPSStaticLease(context.Background(), "account:1/thread:a")
 	require.NoError(t, err)
