@@ -267,16 +267,43 @@ func TestExcelBPSMihomoFailsClosed(t *testing.T) {
 				c.Request.Header.Set("session_id", "sticky-session")
 			}
 			_, err := svc.Forward(context.Background(), c, account, body)
-			if identity {
-				require.ErrorContains(t, err, "basispoints_proxy_unavailable")
-				require.Equal(t, 503, rec.Code)
-			} else {
-				require.ErrorContains(t, err, "basispoints_session_required")
-				require.Equal(t, 400, rec.Code)
-			}
+			require.ErrorContains(t, err, "basispoints_proxy_unavailable")
+			require.Equal(t, 503, rec.Code)
 			require.Nil(t, upstream.lastReq)
 			account.Extra["openai_excel_bps"] = false
 			require.False(t, account.IsExcelBPSMihomoEnabled())
 		})
 	}
+}
+
+func TestExcelBPSAnonymousIdentityIsRequestLocal(t *testing.T) {
+	body := []byte(`{"model":"gpt-6-astra","input":"identical prompt"}`)
+	newContext := func() *gin.Context {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+		return c
+	}
+	first := newContext()
+	id, transient := resolveExcelBPSIdentity(first, body, 1, true)
+	require.True(t, transient)
+	require.NotEmpty(t, id)
+	again, transient := resolveExcelBPSIdentity(first, body, 1, true)
+	require.True(t, transient)
+	require.Equal(t, id, again, "internal retries reuse a request identity")
+	other, transient := resolveExcelBPSIdentity(newContext(), body, 1, true)
+	require.True(t, transient)
+	require.NotEqual(t, id, other, "identical anonymous prompts must not share a session")
+	empty, transient := resolveExcelBPSIdentity(newContext(), body, 1, false)
+	require.False(t, transient)
+	require.Empty(t, empty, "static proxies keep their old identity behavior")
+	first.Request.Header.Set("session_id", "declared-session")
+	explicit, transient := resolveExcelBPSIdentity(first, body, 1, true)
+	require.False(t, transient)
+	second := newContext()
+	second.Request.Header.Set("session_id", "declared-session")
+	same, transient := resolveExcelBPSIdentity(second, body, 1, true)
+	require.False(t, transient)
+	require.Equal(t, explicit, same)
+	otherKey, _ := resolveExcelBPSIdentity(second, body, 2, true)
+	require.NotEqual(t, explicit, otherKey)
 }

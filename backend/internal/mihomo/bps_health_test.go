@@ -259,3 +259,65 @@ func TestBPSHealthFailedRecoveryStaysQuarantined(t *testing.T) {
 	require.True(t, time.Now().Before(h.retryAfter))
 	require.True(t, h.verifiedUntil.IsZero())
 }
+
+func TestBPSBrokenStreamsDoNotBounceBetweenNodes(t *testing.T) {
+	m := bpsTestManager(t)
+	first, err := m.acquireBPSLease(context.Background(), "conversation", nil)
+	require.NoError(t, err)
+	first.ReportStreamFailure()
+	first.ReportStreamFailure()
+	first.Release()
+	h := m.bpsHealth[first.node]
+	require.Equal(t, 1, h.streamFailures)
+	require.WithinDuration(t, time.Now().Add(bpsStreamCooldown), h.retryAfter, time.Second)
+	second, err := m.acquireBPSLease(context.Background(), "conversation", nil)
+	require.NoError(t, err)
+	require.NotEqual(t, first.node, second.node)
+	second.ReportStreamFailure()
+	second.Release()
+	_, err = m.acquireBPSLease(context.Background(), "conversation", nil)
+	require.Error(t, err, "both broken exits must remain quarantined, not bounce back")
+	require.Error(t, m.checkBPSHealth(context.Background(), first.node, first.ProxyURL))
+	// Recovered HTTPS reachability must not erase recent stream failures.
+	h.retryAfter = time.Now().Add(-time.Second)
+	require.NoError(t, m.checkBPSHealth(context.Background(), first.node, first.ProxyURL))
+	require.Equal(t, 1, h.streamFailures)
+	m.bpsStreamFailureLocked(first.node, time.Now())
+	require.WithinDuration(t, time.Now().Add(2*bpsStreamCooldown), h.retryAfter, time.Second)
+	for i := 0; i < 20; i++ {
+		m.bpsStreamFailureLocked(first.node, time.Now())
+	}
+	require.WithinDuration(t, time.Now().Add(bpsStreamMaxCooldown), h.retryAfter, time.Second)
+	// A probe failure cannot shorten a stream cooldown.
+	until := h.retryAfter
+	m.bpsFailureLocked(first.node, time.Now())
+	require.Equal(t, until, h.retryAfter)
+	// The penalty eventually decays without requiring real network traffic.
+	future := h.lastStreamFailure.Add(bpsStreamFailureWindow + time.Second)
+	m.bpsStreamFailureLocked(first.node, future)
+	require.Equal(t, 1, h.streamFailures)
+	require.Equal(t, future.Add(bpsStreamCooldown), h.retryAfter)
+}
+
+func TestBPSTransientLeasesReleaseSessionCapacity(t *testing.T) {
+	m := bpsTestManager(t)
+	sticky, err := m.acquireBPSLease(context.Background(), "sticky", nil)
+	require.NoError(t, err)
+	sticky.Release()
+	for i := 0; i < bpsMaxSessions+10; i++ {
+		lease, err := m.acquireScopedBPSLease(context.Background(), fmt.Sprintf("transient:%d", i), true, nil)
+		require.NoError(t, err)
+		require.Len(t, m.bpsSessions, 2)
+		lease.Release()
+		lease.Release()
+		require.Len(t, m.bpsSessions, 1, "one-shot requests must not wait 30 minutes for eviction")
+	}
+	// Failed acquisition must release the temporary binding too.
+	m.bpsProbe = func(context.Context, string) error { return errors.New("offline") }
+	for _, h := range m.bpsHealth {
+		h.verifiedUntil = time.Time{}
+	}
+	_, err = m.acquireScopedBPSLease(context.Background(), "transient:failed", true, nil)
+	require.Error(t, err)
+	require.Len(t, m.bpsSessions, 1)
+}

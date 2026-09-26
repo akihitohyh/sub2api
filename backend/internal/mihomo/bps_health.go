@@ -17,18 +17,23 @@ import (
 )
 
 const (
-	bpsHealthTTL          = 30 * time.Second
-	bpsFailureCooldown    = time.Minute
-	bpsProbeTimeout       = 5 * time.Second
-	bpsMaxCandidateProbes = 3
+	bpsHealthTTL           = 30 * time.Second
+	bpsFailureCooldown     = time.Minute
+	bpsStreamCooldown      = 5 * time.Minute
+	bpsStreamMaxCooldown   = 30 * time.Minute
+	bpsStreamFailureWindow = 30 * time.Minute
+	bpsProbeTimeout        = 5 * time.Second
+	bpsMaxCandidateProbes  = 3
 )
 
 type bpsNodeHealth struct {
-	verifiedUntil time.Time
-	retryAfter    time.Time
-	failures      int
-	revision      uint64
-	probing       chan struct{}
+	verifiedUntil     time.Time
+	retryAfter        time.Time
+	failures          int
+	streamFailures    int
+	lastStreamFailure time.Time
+	revision          uint64
+	probing           chan struct{}
 }
 
 // BPSLease keeps the selected exit alive until the response body closes.
@@ -54,9 +59,29 @@ func (l *BPSLease) ReportFailure() {
 	})
 }
 
+// ReportStreamFailure quarantines even the first broken stream. A short HTTPS
+// probe cannot establish that a node can carry a complete model response.
+func (l *BPSLease) ReportStreamFailure() {
+	l.failureOnce.Do(func() {
+		l.manager.bpsMu.Lock()
+		defer l.manager.bpsMu.Unlock()
+		l.manager.bpsStreamFailureLocked(l.node, time.Now())
+	})
+}
+
 // AcquireBPSLease probes only HTTPS reachability, never model inference.
 // Excluded local proxy URLs prevent retrying an already failed request exit.
 func AcquireBPSLease(ctx context.Context, scope string, excludedProxyURLs ...string) (*BPSLease, error) {
+	return acquireBPSLeaseScoped(ctx, scope, false, excludedProxyURLs...)
+}
+
+// AcquireBPSTransientLease uses an isolated request identity and drops its
+// binding on failure or final release, so anonymous traffic cannot fill the pool.
+func AcquireBPSTransientLease(ctx context.Context, scope string, excludedProxyURLs ...string) (*BPSLease, error) {
+	return acquireBPSLeaseScoped(ctx, scope, true, excludedProxyURLs...)
+}
+
+func acquireBPSLeaseScoped(ctx context.Context, scope string, transient bool, excludedProxyURLs ...string) (*BPSLease, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -77,7 +102,29 @@ func AcquireBPSLease(ctx context.Context, scope string, excludedProxyURLs ...str
 		}
 	}
 	m.bpsMu.Unlock()
-	return m.acquireBPSLease(ctx, scope, excluded)
+	return m.acquireScopedBPSLease(ctx, scope, transient, excluded)
+}
+
+func (m *Manager) forgetIdleBPSSession(scope string) {
+	digest := sha256.Sum256([]byte(scope))
+	key := hex.EncodeToString(digest[:])
+	m.bpsMu.Lock()
+	defer m.bpsMu.Unlock()
+	if binding := m.bpsSessions[key]; binding != nil && binding.active == 0 {
+		delete(m.bpsSessions, key)
+	}
+}
+
+func (m *Manager) acquireScopedBPSLease(ctx context.Context, scope string, transient bool, excluded map[string]bool) (*BPSLease, error) {
+	if transient {
+		defer m.forgetIdleBPSSession(scope)
+	}
+	lease, err := m.acquireBPSLease(ctx, scope, excluded)
+	if err == nil && transient {
+		release := lease.release
+		lease.release = func() { release(); m.forgetIdleBPSSession(scope) }
+	}
+	return lease, err
 }
 
 func (m *Manager) acquireBPSLease(ctx context.Context, scope string, excluded map[string]bool) (*BPSLease, error) {
@@ -174,12 +221,31 @@ func (m *Manager) bpsFailureLocked(node string, now time.Time) {
 	h.revision++
 	h.verifiedUntil = time.Time{}
 	if h.failures >= 2 {
-		h.retryAfter = now.Add(bpsFailureCooldown)
+		if until := now.Add(bpsFailureCooldown); until.After(h.retryAfter) {
+			h.retryAfter = until
+		}
 	}
 	for _, binding := range m.bpsSessions {
 		if binding.node == node {
 			binding.failed = true
 		}
+	}
+}
+
+func (m *Manager) bpsStreamFailureLocked(node string, now time.Time) {
+	h := m.bpsHealthLocked(node)
+	if now.Sub(h.lastStreamFailure) >= bpsStreamFailureWindow {
+		h.streamFailures = 0
+	}
+	// Bound the streak; repeated concurrent failures must not overflow backoff.
+	if h.streamFailures < 4 {
+		h.streamFailures++
+	}
+	h.lastStreamFailure = now
+	m.bpsFailureLocked(node, now)
+	cooldown := min(bpsStreamCooldown<<(h.streamFailures-1), bpsStreamMaxCooldown)
+	if until := now.Add(cooldown); until.After(h.retryAfter) {
+		h.retryAfter = until
 	}
 }
 

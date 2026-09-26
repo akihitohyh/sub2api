@@ -12,6 +12,7 @@ import (
 	"net/http/httptrace"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/Wei-Shaw/sub2api/internal/mihomo"
@@ -27,12 +28,17 @@ var errExcelBPSProxyUnavailable = errors.New("BPS proxy unavailable")
 type excelBPSLease interface {
 	Release()
 	ReportFailure()
+	ReportStreamFailure()
 }
 
 type excelBPSAcquire func(context.Context, string, ...string) (string, excelBPSLease, error)
 
 func acquireExcelBPSProxy(ctx context.Context, scope string, excluded ...string) (string, excelBPSLease, error) {
-	lease, err := mihomo.AcquireBPSLease(ctx, scope, excluded...)
+	acquire := mihomo.AcquireBPSLease
+	if strings.HasPrefix(scope, "transient:") {
+		acquire = mihomo.AcquireBPSTransientLease
+	}
+	lease, err := acquire(ctx, scope, excluded...)
 	if err != nil {
 		return "", nil, err
 	}
@@ -120,6 +126,7 @@ func (s *OpenAIGatewayService) doExcelBPSRequest(ctx context.Context, c *gin.Con
 			}
 			return nil, nil, proxy, err
 		}
+		c.Set("excel_bps_upstream_attempt", attempt)
 		evidence := &excelBPSWriteEvidence{}
 		resp, err := s.httpUpstream.Do(evidence.request(req), proxy, account.ID, account.Concurrency)
 		if err == nil {
