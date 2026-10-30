@@ -21,6 +21,24 @@ func TestSmartProtocolTimingAndOwnershipReadback(t *testing.T) {
 	user := mustCreateUser(t, client, &service.User{Email: "synthetic-" + uuid.NewString() + "@example.invalid"})
 	key := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "fixture-" + uuid.NewString(), Name: "synthetic"})
 	account := mustCreateAccount(t, client, &service.Account{Name: "synthetic-" + uuid.NewString()})
+	// testEntClient writes committed rows. Remove only this fixture's data so
+	// later dashboard integration suites observe their own request/user totals.
+	t.Cleanup(func() {
+		cleanup := context.Background()
+		for _, statement := range []struct {
+			sql string
+			id  int64
+		}{
+			{"DELETE FROM request_timing_details WHERE usage_log_id IN (SELECT id FROM usage_logs WHERE user_id=$1)", user.ID},
+			{"DELETE FROM usage_logs WHERE user_id=$1", user.ID},
+			{"DELETE FROM api_keys WHERE user_id=$1", user.ID},
+			{"DELETE FROM accounts WHERE id=$1", account.ID},
+			{"DELETE FROM users WHERE id=$1", user.ID},
+		} {
+			_, err := integrationDB.ExecContext(cleanup, statement.sql, statement.id)
+			require.NoError(t, err, "clean synthetic timing fixture")
+		}
+	})
 	usage := &service.UsageLog{UserID: user.ID, APIKeyID: key.ID, AccountID: account.ID, RequestID: uuid.NewString(), Model: "synthetic", InputTokens: 3, OutputTokens: 7, CreatedAt: time.Now().UTC()}
 	_, err := repo.Create(ctx, usage)
 	require.NoError(t, err)

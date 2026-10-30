@@ -84,7 +84,7 @@ func newSmartProtocolNetwork(t *testing.T, mode string, known bool, fail string)
 			if err != nil {
 				return
 			}
-			defer conn.CloseNow()
+			defer func() { _ = conn.CloseNow() }()
 			for {
 				_, body, err := conn.Read(ctx)
 				if err != nil {
@@ -122,7 +122,9 @@ func newSmartProtocolNetwork(t *testing.T, mode string, known bool, fail string)
 				time.Sleep(5 * time.Millisecond)
 			}
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", event)
-			w.(http.Flusher).Flush()
+			if flushErr := http.NewResponseController(w).Flush(); flushErr != nil {
+				return
+			}
 		}
 		if fail == "cancel" {
 			select {
@@ -144,7 +146,7 @@ func newSmartProtocolNetwork(t *testing.T, mode string, known bool, fail string)
 			f.errors <- err
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		conn.SetReadLimit(64 * 1024 * 1024)
 		_, first, err := conn.Read(ctx)
 		if err != nil {
@@ -406,7 +408,7 @@ func TestSmartProtocolConcurrentSticky(t *testing.T) {
 				t.Error("loopback dial failed")
 				return
 			}
-			defer c.CloseNow()
+			defer func() { _ = c.CloseNow() }()
 			for turn := 0; turn < 2; turn++ {
 				cap := 100
 				if i%2 == 0 {

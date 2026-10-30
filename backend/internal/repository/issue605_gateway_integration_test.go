@@ -19,6 +19,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/repository"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -27,6 +28,23 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+// This fixture is a custom native API-key endpoint, not an official-host
+// authorization projection. Keep its final transport restricted to loopback.
+type issue605LoopbackInference struct {
+	client *http.Client
+	host   string
+}
+
+func (u issue605LoopbackInference) Do(r *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	if r.URL == nil || r.URL.Scheme != "http" || r.URL.Host != u.host {
+		return nil, fmt.Errorf("unexpected isolated upstream")
+	}
+	return u.client.Do(r)
+}
+func (u issue605LoopbackInference) DoWithTLS(r *http.Request, p string, id int64, n int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(r, p, id, n)
+}
 
 // Full authenticated handler -> actual scheduler/service/bridge -> loopback SSE,
 // with actual SQL usage/balance settlement and Redis turn-slot readback.
@@ -93,7 +111,7 @@ func TestSmartProtocolGatewayBillingAndQuotaIntegration(t *testing.T) {
 	defer billing.Stop()
 	deferred := service.NewDeferredService(f.accounts, nil, time.Hour)
 	prices := service.NewBillingService(cfg, nil)
-	transport := &issue594OfflineInference{t: t, endpoint: strings.TrimPrefix(upstream.URL, "http://")}
+	transport := issue605LoopbackInference{client: upstream.Client(), host: strings.TrimPrefix(upstream.URL, "http://")}
 	gateway := service.NewOpenAIGatewayService(f.accounts, nil, repository.NewUsageLogRepository(client, f.db), repository.NewUsageBillingRepository(client, f.db), users, nil, nil, repository.NewGatewayCache(redis), cfg, nil, concurrency, prices, nil, billing, transport, deferred, nil, nil, nil, nil, nil, nil, nil)
 	defer gateway.StopOpenAICodexTicketHarvester()
 	defer gateway.CloseOpenAIWSPool()
@@ -106,7 +124,7 @@ func TestSmartProtocolGatewayBillingAndQuotaIntegration(t *testing.T) {
 	defer ingress.Close()
 	conn, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(ingress.URL, "http")+"/v1/responses", &coderws.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer " + key.Key}}})
 	require.NoError(t, err)
-	defer conn.CloseNow()
+	defer func(c *coderws.Conn) { _ = c.CloseNow() }(conn)
 	send := func(input, previous string) {
 		raw, _ := json.Marshal(map[string]any{"type": "response.create", "model": "gpt-5.4", "input": input, "previous_response_id": previous, "store": true})
 		require.NoError(t, conn.Write(ctx, coderws.MessageText, raw))
@@ -147,7 +165,7 @@ func TestSmartProtocolGatewayBillingAndQuotaIntegration(t *testing.T) {
 	require.NoError(t, err)
 	conn, _, err = coderws.Dial(ctx, "ws"+strings.TrimPrefix(ingress.URL, "http")+"/v1/responses", &coderws.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer " + key.Key}}})
 	require.NoError(t, err)
-	defer conn.CloseNow()
+	defer func(c *coderws.Conn) { _ = c.CloseNow() }(conn)
 	send("blocked", "")
 	for {
 		_, _, e := conn.Read(ctx)
