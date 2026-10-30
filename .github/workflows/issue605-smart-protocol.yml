@@ -47,7 +47,7 @@ jobs:
         working-directory: backend
         run: |
           set -euo pipefail
-          go test -race -tags=integration ./internal/repository -run 'TestSmartProtocol|TestUsageBillingRepositoryApply|TestOpenAIAuthConnection' -count=1 -timeout=15m -json > "$RUNNER_TEMP/issue605-proof/integration.jsonl" 2>&1
+          go test -race -tags=integration ./internal/repository -run 'TestSmartProtocol|TestUsageBillingRepositoryApply|TestOpenAIConnectionDatabaseRegistrationBoundary|TestIssue594ProductionGatewayConnectionRouteAndAccountSafety|TestSharedAccountAndUserConcurrencyAcrossIndependentClients|TestGatewayCacheSuite' -count=1 -timeout=15m -json > "$RUNNER_TEMP/issue605-proof/integration.jsonl" 2>&1
       - name: Whitelist evidence and reject skip or empty acceptance
         if: always()
         run: python3 .github/scripts/issue605-proof.py "$RUNNER_TEMP/issue605-proof"

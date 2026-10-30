@@ -1,6 +1,7 @@
 """Emit only test identifiers, status and duration, never application log text."""
 import json
 import pathlib
+import re
 import sys
 
 root = pathlib.Path(sys.argv[1])
@@ -14,8 +15,10 @@ with (root / 'whitelist.jsonl').open('w') as out:
                 try:
                     item = json.loads(line)
                 except ValueError:
-                    # Compiler diagnostics are kept in the run's private raw log;
-                    # public evidence never copies arbitrary application text.
+                    if re.match(r"^(?:[^\s]+/)*[^\s]+\.go:\d+:\d+: (?:undefined:|cannot |not enough|too many|declared and not used|.*has no field or method|.*imported and not used)", line):
+                        safe = {"compiler": line}
+                        out.write(json.dumps(safe) + '\n')
+                        print(json.dumps(safe))
                     continue
                 action = item.get('Action')
                 if action not in ('pass', 'fail', 'skip'):
