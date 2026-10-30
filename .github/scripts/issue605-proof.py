@@ -22,6 +22,20 @@ with (root / 'whitelist.jsonl').open('w') as out:
                         out.write(json.dumps(safe) + '\n')
                         print(json.dumps(safe))
                     continue
+                if item.get('Action') == 'output':
+                    output = item.get('Output', '')
+                    location = re.search(r'(?:/[^\s:]+/)*([A-Za-z0-9_]+\.go):(\d+)', output)
+                    diagnostic = None
+                    if 'WARNING: DATA RACE' in output or 'race detected during execution' in output:
+                        diagnostic = 'race_detected'
+                    elif 'panic:' in output:
+                        diagnostic = 'panic'
+                    if diagnostic or location:
+                        safe = {'Test': item.get('Test'), 'diagnostic': diagnostic}
+                        if location:
+                            safe['location'] = location.group(1) + ':' + location.group(2)
+                        out.write(json.dumps(safe) + '\n')
+                        print(json.dumps(safe))
                 action = item.get('Action')
                 if action not in ('pass', 'fail', 'skip'):
                     continue

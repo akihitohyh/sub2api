@@ -173,7 +173,8 @@ func newSmartProtocolNetwork(t *testing.T, mode string, known bool, fail string)
 				hook(turn)
 			}
 		}}
-		err = f.svc.ProxyResponsesWebSocketFromClient(turnCtx, c, conn, f.account, "synthetic-only", first, hooks)
+		selected := *f.account
+		err = f.svc.ProxyResponsesWebSocketFromClient(turnCtx, c, conn, &selected, "synthetic-only", first, hooks)
 		collector.WhenFinished(func(s requesttiming.Snapshot) { f.timings <- s })
 		collector.Finish(200, false)
 		f.errors <- err
@@ -252,11 +253,11 @@ func TestSmartProtocolHTTPFirstSession(t *testing.T) {
 	f := newSmartProtocolNetwork(t, "auto", true, "")
 	c := f.dial()
 	changed := make(chan struct{})
+	var changeOnce sync.Once
 	f.mu.Lock()
 	f.onTurn = func(turn int) {
 		if turn == 1 {
-			f.cfg.Gateway.OpenAIWS.SmartProtocol.Mode = "ws"
-			close(changed)
+			changeOnce.Do(func() { f.cfg.Gateway.OpenAIWS.SmartProtocol.Mode = "ws"; close(changed) })
 		}
 	}
 	f.mu.Unlock()
