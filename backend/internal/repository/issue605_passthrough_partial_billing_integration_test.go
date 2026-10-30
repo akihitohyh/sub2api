@@ -219,7 +219,7 @@ func runPassthroughPartialBilling(t *testing.T, failure string, prior bool) {
 	require.Eventually(t, func() bool {
 		a, e := slots.GetAccountConcurrency(ctx, f.accountID)
 		u, ue := slots.GetUserConcurrency(ctx, user.ID)
-		k, ke := slots.GetAPIKeyConcurrencyBatch(ctx, []int64{key.ID})
+		k, ke := concurrency.GetAPIKeyConcurrencyBatch(ctx, []int64{key.ID})
 		return e == nil && ue == nil && ke == nil && a == 0 && u == 0 && k[key.ID] == 0
 	}, 4*time.Second, 10*time.Millisecond, "P1_SLOTS_LEAKED")
 	expectedRows := 1

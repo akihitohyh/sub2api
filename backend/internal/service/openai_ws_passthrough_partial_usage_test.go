@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	coderws "github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
