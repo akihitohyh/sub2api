@@ -40,12 +40,12 @@ jobs:
         working-directory: backend
         run: |
           set -euo pipefail
-          go test -race -tags=unit ./internal/service ./internal/handler ./internal/repository ./internal/pkg/requesttiming -run 'TestSmartProtocol|TestOpenAIWSHTTPBridge|TestOpenAIResponsesWebSocket|TestOpenAIWSTurn|TestOpenAIWSFirstTurn|TestTimingWrite|TestTimingBinding|TestOpenAITurnAdmission|TestOpenAIWSKeyAdmission|TestIssue594SIWCFinalEgress' -count=1 -timeout=20m -json > "$RUNNER_TEMP/issue605-proof/packages.jsonl" 2>&1
+          go test -race -tags=unit ./internal/service ./internal/handler ./internal/repository ./internal/pkg/requesttiming ./internal/service/openai_ws_v2 -run 'TestSmartProtocol|TestOpenAIWSHTTPBridge|TestOpenAIResponsesWebSocket|TestOpenAIWSTurn|TestOpenAIWSFirstTurn|TestTimingWrite|TestTimingBinding|TestOpenAITurnAdmission|TestOpenAIWSKeyAdmission|TestIssue594SIWCFinalEgress|TestRelay|TestObserveUpstream|TestParseUsage' -count=1 -timeout=20m -json > "$RUNNER_TEMP/issue605-proof/packages.jsonl" 2>&1
       - name: Repeat real network lifecycle and sticky sessions three times
         working-directory: backend
         run: |
           set -euo pipefail
-          go test -race -tags=unit ./internal/service -run '^TestSmartProtocol(HTTPFirstSession|NetworkModes|ConcurrentSticky|NoReplayAndCleanup|ForeignContinuation|TurnGuardBeforeSend|MissingUsageIsUnknown|Legacy15MiB|StatelessRequestRetainsWS)$' -count=3 -timeout=10m -json > "$RUNNER_TEMP/issue605-proof/repeated.jsonl" 2>&1
+          go test -race -tags=unit ./internal/service -run '^TestSmartProtocol(HTTPFirstSession|NetworkModes|ConcurrentSticky|NoReplayAndCleanup|ForeignContinuation|TurnGuardBeforeSend|MissingUsageIsUnknown|Legacy15MiB|StatelessRequestRetainsWS|PassthroughNetwork)$' -count=3 -timeout=10m -json > "$RUNNER_TEMP/issue605-proof/repeated.jsonl" 2>&1
       - name: Actual isolated PostgreSQL Redis repository integration
         working-directory: backend
         run: |

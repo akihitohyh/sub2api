@@ -40,6 +40,7 @@ type Attempt struct {
 	Events           map[string]float64  `json:"events"`
 }
 type Snapshot struct {
+	WSTurns           []WSTurnTiming     `json:"ws_turns,omitempty"`
 	ProtocolDecision  *ProtocolDecision  `json:"protocol_decision,omitempty"`
 	IdentitySource    string             `json:"identity_source,omitempty"`
 	AuthRejection     string             `json:"auth_rejection,omitempty"`
@@ -190,6 +191,10 @@ func (c *Collector) snapshot() Snapshot {
 	if d.ProtocolDecision != nil {
 		decision := *d.ProtocolDecision
 		d.ProtocolDecision = &decision
+	}
+	d.WSTurns = append([]WSTurnTiming(nil), d.WSTurns...)
+	for i := range d.WSTurns {
+		d.WSTurns[i] = cloneTurnTiming(d.WSTurns[i])
 	}
 	d.Routes = append([]RouteObservation(nil), d.Routes...)
 	d.Events = cloneEvents(d.Events)

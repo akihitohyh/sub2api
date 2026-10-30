@@ -44,6 +44,7 @@ type RelayResult struct {
 	RequestID               string
 	TerminalEventType       string
 	FirstTokenMs            *int
+	FirstUpstreamEventMs    *int
 	Duration                time.Duration
 	ClientToUpstreamFrames  int64
 	UpstreamToClientFrames  int64
@@ -51,6 +52,7 @@ type RelayResult struct {
 }
 
 type RelayTurnResult struct {
+	UsageObserved         bool
 	RequestModel          string
 	ResponseModel         string
 	ResponseModelConflict bool
@@ -61,6 +63,7 @@ type RelayTurnResult struct {
 	StartedAt             time.Time
 	Duration              time.Duration
 	FirstTokenMs          *int
+	FirstUpstreamEventMs  *int
 }
 
 type RelayExit struct {
@@ -101,6 +104,7 @@ type RelayTraceEvent struct {
 }
 
 type relayState struct {
+	turnUsageObserved       bool
 	usage                   Usage
 	turnUsage               Usage
 	turnWroteDownstream     atomic.Pointer[atomic.Bool]
@@ -113,6 +117,7 @@ type relayState struct {
 	responseConflict        bool
 	terminalEventType       string
 	firstTokenMs            *int
+	firstUpstreamEventMs    *int
 	turnTimingByID          map[string]*relayTurnTiming
 	activeTurn              *relayTurnTiming
 	pendingBareError        *observedUpstreamEvent
@@ -126,6 +131,7 @@ type relayExitSignal struct {
 }
 
 type observedUpstreamEvent struct {
+	usageObserved       bool
 	terminal            bool
 	eventType           string
 	responseID          string
@@ -136,11 +142,13 @@ type observedUpstreamEvent struct {
 	responseServiceTier string
 	duration            time.Duration
 	firstToken          *int
+	firstUpstreamEvent  *int
 }
 
 type relayTurnTiming struct {
 	startAt               time.Time
 	firstTokenMs          *int
+	firstUpstreamEventMs  *int
 	firstResponseModel    string
 	terminalResponseModel string
 	responseModelConflict bool
@@ -783,6 +791,12 @@ func observeUpstreamMessage(
 		responseID = strings.TrimSpace(values[3].String())
 	}
 	now := nowFn()
+	if state.firstUpstreamEventMs == nil {
+		ms := int(now.Sub(startAt).Milliseconds())
+		if ms >= 0 {
+			state.firstUpstreamEventMs = &ms
+		}
+	}
 
 	if state.firstTokenMs == nil && isTokenEvent(eventType) {
 		ms := int(now.Sub(startAt).Milliseconds())
@@ -813,6 +827,12 @@ func observeUpstreamMessage(
 		}
 	} else {
 		turnTiming = state.activeTurn
+	}
+	if turnTiming != nil && turnTiming.firstUpstreamEventMs == nil {
+		ms := int(now.Sub(turnTiming.startAt).Milliseconds())
+		if ms >= 0 {
+			turnTiming.firstUpstreamEventMs = &ms
+		}
 	}
 	observeRelayTurnResponseModel(turnTiming, firstRelayResponseModel(message), isTerminalEvent(eventType))
 	if !isTerminalEvent(eventType) {
@@ -888,6 +908,8 @@ func finalizeObservedRelayTerminal(state *relayState, observed observedUpstreamE
 	if state == nil || strings.TrimSpace(observed.eventType) == "" {
 		return observedUpstreamEvent{}
 	}
+	observed.usageObserved = state.turnUsageObserved
+	state.turnUsageObserved = false
 	observed.usage = finalizeRelayTurnUsage(state)
 	observed.terminal = true
 	responseID := strings.TrimSpace(observed.responseID)
@@ -907,6 +929,7 @@ func finalizeObservedRelayTerminal(state *relayState, observed observedUpstreamE
 			observed.startedAt = turnTiming.startAt
 			observed.duration = duration
 			observed.firstToken = openAIWSRelayCloneIntPtr(turnTiming.firstTokenMs)
+			observed.firstUpstreamEvent = openAIWSRelayCloneIntPtr(turnTiming.firstUpstreamEventMs)
 		}
 	} else {
 		state.consumePendingTurnStartedAt()
@@ -932,6 +955,7 @@ func emitTurnComplete(
 		requestModel = state.currentRequestModel()
 	}
 	onTurnComplete(RelayTurnResult{
+		UsageObserved:         observed.usageObserved,
 		RequestModel:          requestModel,
 		ResponseModel:         observed.responseModel,
 		ResponseModelConflict: observed.responseConflict,
@@ -942,6 +966,7 @@ func emitTurnComplete(
 		StartedAt:             observed.startedAt,
 		Duration:              observed.duration,
 		FirstTokenMs:          openAIWSRelayCloneIntPtr(observed.firstToken),
+		FirstUpstreamEventMs:  openAIWSRelayCloneIntPtr(observed.firstUpstreamEvent),
 	})
 }
 
@@ -1190,6 +1215,7 @@ func parseUsageAndAccumulate(
 			int64(inputTokens), int64(outputTokens), usageResult.Get("total_tokens").Int(), reasoningTokens,
 		))
 	}
+	state.turnUsageObserved = true
 	parsedUsage := Usage{
 		InputTokens:              inputTokens,
 		ImageInputTokens:         int(imageInputTokens),
@@ -1306,6 +1332,7 @@ func enrichResult(result *RelayResult, state *relayState, duration time.Duration
 	result.RequestID = state.lastResponseID
 	result.TerminalEventType = state.terminalEventType
 	result.FirstTokenMs = state.firstTokenMs
+	result.FirstUpstreamEventMs = state.firstUpstreamEventMs
 }
 
 func (s *relayState) setRequestModel(model string) {

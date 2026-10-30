@@ -845,8 +845,10 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 		if openAIWSMessageShouldParseUsage(eventType, upstreamMessage) {
 			parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
-			if _, observed := extractOpenAIUsageFromJSONBytes(upstreamMessage); observed {
-				usageObserved = true
+			if strictSession {
+				if _, observed := extractOpenAIUsageFromJSONBytes(upstreamMessage); observed {
+					usageObserved = true
+				}
 			}
 		}
 		if eventType == "error" || eventType == "response.failed" {

@@ -31,12 +31,22 @@ func (s *OpenAIGatewayService) wrapSmartProtocolHooks(ctx context.Context, accou
 		if result != nil {
 			result.UpstreamProtocol = smartSession.Decision.Protocol
 			result.ProtocolDecisionReason = smartSession.Decision.Reason
+			var usageAvailable *bool
+			if smartSession.Decision.Mode != "shadow" && smartSession.Decision.Reason != "legacy_bridge" {
+				available := !result.UsageUnavailable
+				usageAvailable = &available
+			}
+			requesttiming.RecordWSTurn(ctx, requesttiming.WSTurnTiming{Turn: turn, Upstream: result.UpstreamProtocol, FirstUpstreamEventMS: result.FirstUpstreamEventMs, FirstActualContentMS: result.FirstTokenMs, UsageAvailable: usageAvailable})
 			if err == nil && !result.UsageUnavailable && result.UpstreamTerminalEvent == "response.completed" {
 				effort := ""
 				if result.ReasoningEffort != nil {
 					effort = *result.ReasoningEffort
 				}
-				key := openAISmartProtocolHistoryKey{account.ID, account.AuthConnectionID, account.AuthConnectionRevision, result.UpstreamModel, effort, result.UpstreamProtocol}
+				model := result.UpstreamModel
+				if model == "" {
+					model = normalizeOpenAIModelForUpstream(account, account.GetMappedModel(result.Model))
+				}
+				key := openAISmartProtocolHistoryKey{account.ID, account.AuthConnectionID, account.AuthConnectionRevision, model, effort, result.UpstreamProtocol}
 				s.smartProtocolHistory.observe(key, result.Usage.OutputTokens, time.Now())
 			}
 		}

@@ -47,3 +47,11 @@ The legacy bridge strips previous IDs and rebuilds input. Smart HTTP must preser
 | Production latency/cache/quality goals | No authorized production or paid traffic | Not implemented / not claimed |
 
 All dynamic acceptance runs exclusively in disposable GitHub Actions environments with synthetic loopback HTTP/WS/SSE and isolated PostgreSQL/Redis. Local work is limited to source inspection, formatting and diff checks. Final evidence must bind every check to exact head, include paginated check runs and legacy statuses, preserve run URLs and sanitized logs, and reject skipped/no-test results as acceptance.
+
+## Implementation refinements pending exact-head acceptance
+
+The real Codex adapter review narrowed eligibility: native Codex HTTP is supported, but its stateless normalization is not evidence of a stateful HTTP chain. Smart HTTP therefore requires an API-key native Responses adapter, a positive existing endpoint probe, explicit client store=true, and no stateless CN adapter. It rejects a later store=false/omitted frame rather than enabling upstream retention for the client. This restriction applies to manual HTTP too. Existing forced/15 MiB bridges retain their earlier contract.
+
+Optional `ws_turns` in the existing timing JSON keeps at most 128 per-turn observations; first upstream event and first actual content have separate nullable fields, including passthrough. Usage availability remains nullable for shadow/legacy paths that did not collect it. There is no schema migration. Strict smart sessions retain authoritative usage if a stream later fails; the handler settles it once through existing pricing/billing and cyber-policy deduplication. Missing usage remains unavailable, never a synthetic zero.
+
+An earlier remote source (`eb2b448c2f379504c0390b7908605e88db46382d`, run 41096273246) compiled actual service/handler/repository/timing packages: 158 selected tests and 29 isolated repository integration tests passed, none skipped. This does not certify the subsequent implementation. Source 923ffe9aa failed two failure-terminal client lifecycle assertions; the test client was corrected to close after response.failed. Later heads still require the complete package, repeated network, PG/Redis and billing acceptance on their exact SHA.

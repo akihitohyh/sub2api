@@ -670,7 +670,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	smartStrict := false
 	legacyBridge := forceHTTPBridge
 	if s.cfg != nil && s.cfg.Gateway.OpenAIWS.SmartProtocol.Enabled {
-		legacyBridge = forceHTTPBridge || s.shouldBridgeOpenAIWSPassthroughFirstMessage(account, firstClientMessage)
 		var decision openAISmartProtocolDecision
 		if value, ok := c.Get(smartProtocolSessionKey); ok {
 			smartSession, _ = value.(*openAISmartProtocolSession)
@@ -724,7 +723,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
 				return fmt.Errorf("websocket ingress requires ws_v2 transport, got=%s", wsDecision.Transport)
 			}
-			if s.shouldBridgeOpenAIWSPassthroughFirstMessage(account, firstClientMessage) || (smartSession != nil && smartSession.Decision.Protocol == "http") {
+			if s.shouldBridgeOpenAIWSPassthroughFirstMessage(account, firstClientMessage) {
+				forceHTTPBridge = true
+				if smartSession != nil {
+					smartSession.Decision.Protocol, smartSession.Decision.Candidate, smartSession.Decision.Reason = "http", "http", "legacy_bridge"
+					smartStrict = false
+					ctx = context.WithValue(ctx, smartProtocolContextKey{}, false)
+				}
+				break
+			}
+			if smartSession != nil && smartSession.Decision.Mode != "shadow" && smartSession.Decision.Protocol == "http" {
 				forceHTTPBridge = true
 				break
 			}
@@ -762,13 +770,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 	}
-	if smartSession != nil && smartSession.Decision.Protocol == "http" {
+	if smartSession != nil && smartSession.Decision.Mode != "shadow" && smartSession.Decision.Protocol == "http" {
 		forceHTTPBridge = true
 	}
 	if !forceHTTPBridge && wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
 		return fmt.Errorf("websocket ingress requires ws_v2 transport, got=%s", wsDecision.Transport)
 	}
-	hooks = s.wrapSmartProtocolHooks(ctx, account, smartSession, hooks)
 	dedicatedMode := modeRouterV2Enabled && ingressMode == OpenAIWSIngressModeDedicated
 	if hooks != nil {
 		originalHooks := hooks
@@ -1190,7 +1197,21 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return err
 	}
 
-	useHTTPBridge := forceHTTPBridge || s.shouldBridgeOpenAIWSHTTP(account, firstPayload.payloadBytes, firstPayload.previousResponseID)
+	legacyPayloadBridge := s.shouldBridgeOpenAIWSHTTP(account, firstPayload.payloadBytes, firstPayload.previousResponseID)
+	useHTTPBridge := forceHTTPBridge || legacyPayloadBridge
+	if smartSession != nil {
+		if legacyPayloadBridge {
+			smartSession.Decision.Protocol, smartSession.Decision.Candidate, smartSession.Decision.Reason = "http", "http", "legacy_bridge"
+			smartStrict = false
+			ctx = context.WithValue(ctx, smartProtocolContextKey{}, false)
+		}
+		if useHTTPBridge {
+			smartSession.Decision.Protocol = "http"
+		} else {
+			smartSession.Decision.Protocol = "ws"
+		}
+	}
+	hooks = s.wrapSmartProtocolHooks(ctx, account, smartSession, hooks)
 	turnState := strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
 	stateStore := s.getOpenAIWSStateStore()
 	groupID, enforceGroup := openAITurnAdmissionGroupFromContext(c)
@@ -1254,6 +1275,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			bridgeReason = "plugin_http_bridge"
 		case ingressMode == OpenAIWSIngressModeHTTPBridge:
 			bridgeReason = "account_mode_http_bridge"
+		case smartStrict:
+			bridgeReason = smartSession.Decision.Reason
 		case forceHTTPBridge:
 			bridgeReason = "passthrough_payload_http_bridge"
 		}
@@ -1893,8 +1916,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if openAIWSMessageShouldParseUsage(eventType, upstreamMessage) {
 				regionalMeterObserveUsage(ctx, upstreamMessage, eventType)
 				parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
-				if _, observed := extractOpenAIUsageFromJSONBytes(upstreamMessage); observed {
-					usageObserved = true
+				if smartStrict {
+					if _, observed := extractOpenAIUsageFromJSONBytes(upstreamMessage); observed {
+						usageObserved = true
+					}
 				}
 			}
 			if eventType == "error" || eventType == "response.failed" {

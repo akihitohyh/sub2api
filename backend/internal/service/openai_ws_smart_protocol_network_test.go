@@ -91,7 +91,10 @@ func newSmartProtocolNetwork(t *testing.T, mode string, known bool, fail string)
 				}
 				f.wsCalls.Add(1)
 				f.remember(body)
-				for _, event := range f.events(body) {
+				for i, event := range f.events(body) {
+					if i == 1 {
+						time.Sleep(5 * time.Millisecond)
+					}
 					if err := conn.Write(ctx, coderws.MessageText, []byte(event)); err != nil {
 						return
 					}
@@ -113,7 +116,10 @@ func newSmartProtocolNetwork(t *testing.T, mode string, known bool, fail string)
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		for _, event := range f.events(body) {
+		for i, event := range f.events(body) {
+			if i == 1 {
+				time.Sleep(5 * time.Millisecond)
+			}
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", event)
 			w.(http.Flusher).Flush()
 		}
@@ -261,7 +267,7 @@ func TestSmartProtocolHTTPFirstSession(t *testing.T) {
 	require.Equal(t, "http", first.UpstreamProtocol)
 	require.NotNil(t, first.FirstUpstreamEventMs)
 	require.NotNil(t, first.FirstTokenMs)
-	require.LessOrEqual(t, *first.FirstUpstreamEventMs, *first.FirstTokenMs)
+	require.Less(t, *first.FirstUpstreamEventMs, *first.FirstTokenMs)
 	f.send(c, "second", id, 100)
 	f.terminal(c)
 	second := f.result()
@@ -282,6 +288,10 @@ func TestSmartProtocolHTTPFirstSession(t *testing.T) {
 		t.Fatal("session cleanup did not finish")
 	}
 	timing := <-f.timings
+	require.Len(t, timing.WSTurns, 2)
+	require.Equal(t, "http", timing.WSTurns[1].Upstream)
+	require.NotNil(t, timing.WSTurns[1].FirstUpstreamEventMS)
+	require.NotNil(t, timing.WSTurns[1].FirstActualContentMS)
 	require.NotNil(t, timing.ProtocolDecision)
 	require.Equal(t, "ws", timing.ProtocolDecision.Ingress)
 	require.Equal(t, "http", timing.ProtocolDecision.Upstream)
@@ -480,4 +490,34 @@ func TestSmartProtocolStatelessRequestRetainsWS(t *testing.T) {
 	require.Equal(t, "ws", f.result().UpstreamProtocol)
 	require.EqualValues(t, 1, f.wsCalls.Load())
 	require.Zero(t, f.httpCalls.Load())
+}
+
+func TestSmartProtocolPassthroughNetwork(t *testing.T) {
+	for _, mode := range []string{"auto", "shadow", "http", "ws"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newSmartProtocolNetwork(t, mode, true, "")
+			f.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
+			f.cfg.Gateway.OpenAIWS.IngressModeDefault = OpenAIWSIngressModePassthrough
+			c := f.dial()
+			f.send(c, "first", "", 8000)
+			id := f.terminal(c)
+			first := f.result()
+			require.NotNil(t, first.FirstUpstreamEventMs)
+			want := "http"
+			if mode == "shadow" || mode == "ws" {
+				want = "ws"
+			}
+			require.Equal(t, want, first.UpstreamProtocol)
+			f.send(c, "second", id, 100)
+			f.terminal(c)
+			require.Equal(t, want, f.result().UpstreamProtocol)
+			if want == "http" {
+				require.EqualValues(t, 2, f.httpCalls.Load())
+				require.Zero(t, f.wsCalls.Load())
+			} else {
+				require.EqualValues(t, 2, f.wsCalls.Load())
+				require.Zero(t, f.httpCalls.Load())
+			}
+		})
+	}
 }
