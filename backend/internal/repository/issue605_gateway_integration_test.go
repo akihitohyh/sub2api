@@ -63,6 +63,10 @@ func TestSmartProtocolGatewayBillingAndQuotaIntegration(t *testing.T) {
 			require.Equal(t, "second", gjson.GetBytes(raw, "input").String())
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
+		if gjson.GetBytes(raw, "input").String() == "partial" {
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_smart_partial\",\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}}\n\n")
+			return
+		}
 		_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_smart_%d\"}}\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_smart_%d\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":7}}}\n\n", n, n)
 	}))
 	defer upstream.Close()
@@ -120,10 +124,18 @@ func TestSmartProtocolGatewayBillingAndQuotaIntegration(t *testing.T) {
 	terminal()
 	send("second", "resp_smart_1")
 	terminal()
+	send("partial", "resp_smart_2")
+	for {
+		_, _, e := conn.Read(ctx)
+		if e != nil {
+			break
+		}
+	}
+
 	require.Eventually(t, func() bool {
 		var n int
 		_ = f.db.QueryRow(`SELECT count(*) FROM usage_logs WHERE account_id=$1`, f.accountID).Scan(&n)
-		return n == 2
+		return n == 3
 	}, 5*time.Second, 20*time.Millisecond)
 	var balance, cost float64
 	require.NoError(t, f.db.QueryRow(`SELECT balance FROM users WHERE id=$1`, user.ID).Scan(&balance))
@@ -133,16 +145,19 @@ func TestSmartProtocolGatewayBillingAndQuotaIntegration(t *testing.T) {
 	// Authoritative account quota changes are checked before a later send.
 	_, err = f.db.Exec(`UPDATE accounts SET rate_limited_at=NOW(),rate_limit_reset_at=NOW()+INTERVAL '5 minutes' WHERE id=$1`, f.accountID)
 	require.NoError(t, err)
-	send("blocked", "resp_smart_2")
+	conn, _, err = coderws.Dial(ctx, "ws"+strings.TrimPrefix(ingress.URL, "http")+"/v1/responses", &coderws.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer " + key.Key}}})
+	require.NoError(t, err)
+	defer conn.CloseNow()
+	send("blocked", "")
 	for {
 		_, _, e := conn.Read(ctx)
 		if e != nil {
 			break
 		}
 	}
-	require.EqualValues(t, 2, calls.Load(), "quota rejection cannot submit or replay a third turn")
+	require.EqualValues(t, 3, calls.Load(), "partial usage is settled once; quota rejection cannot submit or replay")
 	require.Eventually(t, func() bool { n, e := slots.GetAccountConcurrency(ctx, f.accountID); return e == nil && n == 0 }, 5*time.Second, 20*time.Millisecond)
 	var rows int
 	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM usage_logs WHERE account_id=$1`, f.accountID).Scan(&rows))
-	require.Equal(t, 2, rows)
+	require.Equal(t, 3, rows)
 }

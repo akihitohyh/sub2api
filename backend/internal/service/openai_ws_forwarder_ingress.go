@@ -1407,7 +1407,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				bridgeErr = clientReader.closeForControl(ctx)
 			} else if errors.Is(bridgeErr, errOpenAIWSUsageDrainExpired) && clientReader.disconnected() {
 				if hooks != nil && hooks.AfterTurn != nil {
-					hooks.AfterTurn(turn, nil, nil)
+					if smartStrict {
+						hooks.AfterTurn(turn, result, bridgeErr)
+					} else {
+						hooks.AfterTurn(turn, nil, nil)
+					}
 				}
 				return nil
 			} else if errors.Is(bridgeErr, errOpenAIWSUsageDrainExpired) {
@@ -1758,7 +1762,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	// that admission; a new turn must recheck after all lease/handshake waits.
 	latencyGenerationStartedTurn := 0
 	priorityLatencyCtx := ctx
-	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string, requestedReasoningEffort *string) (*OpenAIForwardResult, error) {
+	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string, requestedReasoningEffort *string) (forwardResult *OpenAIForwardResult, forwardErr error) {
 		responseModelObserver := &upstreamResponseModelObserver{}
 		if lease == nil {
 			return nil, errors.New("upstream websocket lease is nil")
@@ -1818,6 +1822,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 		responseID := ""
 		usage := OpenAIUsage{}
+		usageObserved := false
 		imageCounter := newOpenAIImageOutputCounter()
 		var firstTokenMs *int
 		var firstEventMs *int
@@ -1847,6 +1852,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				mappedModelBytes = []byte(mappedModel)
 			}
 		}
+		defer func() {
+			if smartStrict && forwardErr != nil && forwardResult == nil {
+				forwardResult = &OpenAIForwardResult{RequestID: responseID, Usage: usage, UsageUnavailable: !usageObserved, ObservedUsageOnError: usageObserved, Model: originalModel, UpstreamModel: mappedModel, ReasoningEffort: extractOpenAIReasoningEffortFromBody(payload, mappedModel, originalModel), RequestedReasoningEffort: requestedReasoningEffort, Stream: reqStream, OpenAIWSMode: true, UpstreamProtocol: "ws", FirstTokenMs: firstTokenMs, FirstUpstreamEventMs: firstEventMs, Duration: time.Since(turnStart), streamReadIncomplete: true}
+			}
+		}()
 		for {
 			upstreamMessage, readErr := lease.ReadMessageWithContextTimeout(ctx, s.openAIWSReadTimeout())
 			if readErr != nil {
@@ -1882,6 +1892,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if openAIWSMessageShouldParseUsage(eventType, upstreamMessage) {
 				regionalMeterObserveUsage(ctx, upstreamMessage, eventType)
 				parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
+				if _, observed := extractOpenAIUsageFromJSONBytes(upstreamMessage); observed {
+					usageObserved = true
+				}
 			}
 			if eventType == "error" || eventType == "response.failed" {
 				markOpenAICyberPolicyEvent(c, upstreamMessage, http.StatusOK, &usage)
@@ -2089,6 +2102,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				result := &OpenAIForwardResult{
 					RequestID:                     responseID,
 					Usage:                         usage,
+					UsageUnavailable:              smartStrict && !usageObserved,
+					ObservedUsageOnError:          smartStrict && usageObserved,
 					Model:                         originalModel,
 					UpstreamModel:                 mappedModel,
 					UpstreamResponseModel:         responseModelObserver.Model(),

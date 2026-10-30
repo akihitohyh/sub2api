@@ -671,6 +671,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 
 	responseID := ""
 	usage := OpenAIUsage{}
+	usageObserved := false
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
 	var firstEventMs *int
@@ -709,6 +710,9 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		result := &OpenAIForwardResult{
 			RequestID:                     responseID,
 			Usage:                         usage,
+			UsageUnavailable:              strictSession && !usageObserved,
+			ObservedUsageOnError:          strictSession && usageObserved,
+			streamReadIncomplete:          strictSession && upstreamTerminalEvent == "",
 			Model:                         originalModel,
 			UpstreamModel:                 mappedModel,
 			UpstreamResponseModel:         responseModelObserver.Model(),
@@ -837,6 +841,9 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 		if openAIWSMessageShouldParseUsage(eventType, upstreamMessage) {
 			parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
+			if _, observed := extractOpenAIUsageFromJSONBytes(upstreamMessage); observed {
+				usageObserved = true
+			}
 		}
 		if eventType == "error" || eventType == "response.failed" {
 			markOpenAICyberPolicyEvent(c, upstreamMessage, http.StatusOK, &usage)

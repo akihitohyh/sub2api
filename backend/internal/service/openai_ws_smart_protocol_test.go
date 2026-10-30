@@ -87,3 +87,23 @@ func TestSmartProtocolHistory(t *testing.T) {
 	}
 	require.Len(t, h.buckets[key], 128)
 }
+
+func TestSmartProtocolAuthorizationMatrix(t *testing.T) {
+	cases := []struct {
+		name    string
+		account *Account
+		http    bool
+	}{
+		{"confirmed API key", &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Extra: map[string]any{"openai_responses_supported": true}}, true},
+		{"negative API key", &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Extra: map[string]any{"openai_responses_supported": false}}, false},
+		{"unknown API key", &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, false},
+		{"native Codex", &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"client_id": openai.ClientID}}, true},
+		{"unknown registration", &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"client_id": "unrecognized"}}, false},
+		{"BPS registration", &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"client_id": openai.ExcelClientID}}, false},
+		{"managed projection", &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, AuthConnectionID: "synthetic", Extra: map[string]any{"openai_responses_supported": true, "openai_connections_managed": true, "openai_connection_kind": "api_key"}}, false},
+		{"identity only", &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{"openai_connection_kind": "siwc_identity"}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.http, smartProtocolHTTPSupported(tc.account)) })
+	}
+}

@@ -34,5 +34,5 @@ with (root / 'whitelist.jsonl').open('w') as out:
                     counts['failed'] += 1
         summary[name] = counts
 (root / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
-if any(v['passed'] == 0 or v['failed'] or v['skipped'] for v in summary.values()):
+if any(v['passed'] == 0 or v['smart'] == 0 or v['failed'] or v['skipped'] for v in summary.values()):
     raise SystemExit('acceptance incomplete: missing, failed, or skipped tests')

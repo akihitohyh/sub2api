@@ -96,7 +96,7 @@ func newSmartProtocolNetwork(t *testing.T, mode string, known bool, fail string)
 						return
 					}
 				}
-				if fail == "eof" {
+				if fail == "eof" || fail == "partial_usage" {
 					return
 				}
 			}
@@ -190,6 +190,9 @@ func (f *smartProtocolNetwork) events(body []byte) []string {
 	}
 	id := "resp_" + seed
 	events := []string{fmt.Sprintf(`{"type":"response.created","response":{"id":%q}}`, id)}
+	if f.fail == "partial_usage" {
+		return append(events, `{"type":"response.in_progress","response":{"id":"resp_partial","usage":{"input_tokens":3,"output_tokens":2}}}`)
+	}
 	if f.fail == "eof" || f.fail == "cancel" {
 		return events
 	}
@@ -197,6 +200,9 @@ func (f *smartProtocolNetwork) events(body []byte) []string {
 		return append(events, `{"type":"response.failed","response":{"id":"resp_failed","status":"failed","error":{"code":"server_error","message":"synthetic failure"},"usage":{"input_tokens":3,"output_tokens":2}}}`)
 	}
 	events = append(events, `{"type":"response.function_call_arguments.delta","delta":"{}","item_id":"fc_synthetic","output_index":0}`, `{"type":"response.output_item.done","item":{"id":"fc_synthetic","type":"function_call","call_id":"call_synthetic","name":"lookup","arguments":"{}"}}`, `{"type":"response.output_text.delta","delta":"ok"}`)
+	if f.fail == "missing_usage" {
+		return append(events, fmt.Sprintf(`{"type":"response.completed","response":{"id":%q,"status":"completed","output":[]}}`, id))
+	}
 	events = append(events, fmt.Sprintf(`{"type":"response.completed","response":{"id":%q,"model":"gpt-5.1","status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":7}}}`, id))
 	return events
 }
@@ -314,7 +320,7 @@ func TestSmartProtocolNetworkModes(t *testing.T) {
 }
 func TestSmartProtocolNoReplayAndCleanup(t *testing.T) {
 	for _, mode := range []string{"http", "ws"} {
-		for _, failure := range []string{"eof", "event_error", "cancel", "http_error"} {
+		for _, failure := range []string{"eof", "event_error", "cancel", "http_error", "partial_usage"} {
 			if mode == "ws" && failure == "http_error" {
 				continue
 			}
@@ -343,6 +349,12 @@ func TestSmartProtocolNoReplayAndCleanup(t *testing.T) {
 					t.Fatal("failed turn cleanup stalled")
 				}
 				require.EqualValues(t, 1, f.httpCalls.Load()+f.wsCalls.Load(), "submitted request must execute exactly once")
+				if failure == "partial_usage" {
+					result := f.result()
+					require.True(t, result.ObservedUsageOnError)
+					require.False(t, result.UsageUnavailable)
+					require.Equal(t, 2, result.Usage.OutputTokens)
+				}
 			})
 		}
 	}
@@ -439,6 +451,18 @@ func TestSmartProtocolTurnGuardBeforeSend(t *testing.T) {
 				}
 			}
 			require.EqualValues(t, 1, f.httpCalls.Load()+f.wsCalls.Load())
+		})
+	}
+}
+
+func TestSmartProtocolMissingUsageIsUnknown(t *testing.T) {
+	for _, mode := range []string{"http", "ws"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newSmartProtocolNetwork(t, mode, true, "missing_usage")
+			c := f.dial()
+			f.send(c, "first", "", 100)
+			f.terminal(c)
+			require.True(t, f.result().UsageUnavailable)
 		})
 	}
 }
