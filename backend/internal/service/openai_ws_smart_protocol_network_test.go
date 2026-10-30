@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -547,4 +548,26 @@ func TestSmartProtocolToolContinuation(t *testing.T) {
 			require.EqualValues(t, 2, f.httpCalls.Load()+f.wsCalls.Load())
 		})
 	}
+}
+
+func TestSmartProtocolLegacyNoReplay(t *testing.T) {
+	f := newSmartProtocolNetwork(t, "auto", true, "http_error")
+	f.cfg.Gateway.OpenAIWS.HTTPBridgeThresholdBytes = 1
+	c := f.dial()
+	f.send(c, "first", "", 100)
+	for {
+		_, _, err := c.Read(f.ctx)
+		if err != nil {
+			break
+		}
+	}
+	select {
+	case err := <-f.errors:
+		var failover *UpstreamFailoverError
+		require.False(t, errors.As(err, &failover))
+	case <-f.ctx.Done():
+		t.Fatal("legacy failure cleanup stalled")
+	}
+	require.EqualValues(t, 1, f.httpCalls.Load())
+	require.Zero(t, f.wsCalls.Load())
 }

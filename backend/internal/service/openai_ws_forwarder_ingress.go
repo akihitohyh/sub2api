@@ -675,7 +675,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			smartSession, _ = value.(*openAISmartProtocolSession)
 		}
 		if smartSession != nil {
-			if smartSession.AccountID != account.ID || smartSession.ConnectionID != account.AuthConnectionID || smartSession.Revision != account.AuthConnectionRevision {
+			if smartSession.Decision.Mode != "shadow" && (smartSession.AccountID != account.ID || smartSession.ConnectionID != account.AuthConnectionID || smartSession.Revision != account.AuthConnectionRevision) {
 				return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "session authorization changed", nil)
 			}
 			decision = smartSession.Decision
@@ -692,7 +692,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if c != nil {
 			c.Set(smartProtocolSessionKey, smartSession)
 		}
-		smartStrict = decision.Mode != "shadow" && !legacyBridge
+		smartStrict = decision.Mode != "shadow"
 		ctx = context.WithValue(ctx, smartProtocolContextKey{}, smartStrict)
 		// Neither output absence nor transport failure authorizes account failover.
 		defer func() {
@@ -727,8 +727,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				forceHTTPBridge = true
 				if smartSession != nil {
 					smartSession.Decision.Protocol, smartSession.Decision.Candidate, smartSession.Decision.Reason = "http", "http", "legacy_bridge"
-					smartStrict = false
-					ctx = context.WithValue(ctx, smartProtocolContextKey{}, false)
 				}
 				break
 			}
@@ -757,8 +755,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			forceHTTPBridge = true
 			if smartSession != nil {
 				smartSession.Decision.Protocol, smartSession.Decision.Candidate, smartSession.Decision.Reason = "http", "http", "legacy_bridge"
-				smartStrict = false
-				ctx = context.WithValue(ctx, smartProtocolContextKey{}, false)
 			}
 		case OpenAIWSIngressModeCtxPool, OpenAIWSIngressModeShared, OpenAIWSIngressModeDedicated:
 			// continue
@@ -1202,14 +1198,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if smartSession != nil {
 		if legacyPayloadBridge {
 			smartSession.Decision.Protocol, smartSession.Decision.Candidate, smartSession.Decision.Reason = "http", "http", "legacy_bridge"
-			smartStrict = false
-			ctx = context.WithValue(ctx, smartProtocolContextKey{}, false)
 		}
 		if useHTTPBridge {
 			smartSession.Decision.Protocol = "http"
 		} else {
 			smartSession.Decision.Protocol = "ws"
 		}
+	}
+	smartStateful := smartStrict && useHTTPBridge && smartSession.Decision.Reason != "legacy_bridge"
+	if smartStateful {
+		ctx = context.WithValue(ctx, smartProtocolStatefulContextKey{}, true)
 	}
 	hooks = s.wrapSmartProtocolHooks(ctx, account, smartSession, hooks)
 	turnState := strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
@@ -1275,7 +1273,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			bridgeReason = "plugin_http_bridge"
 		case ingressMode == OpenAIWSIngressModeHTTPBridge:
 			bridgeReason = "account_mode_http_bridge"
-		case smartStrict:
+		case smartStateful:
 			bridgeReason = smartSession.Decision.Reason
 		case forceHTTPBridge:
 			bridgeReason = "passthrough_payload_http_bridge"
@@ -1353,7 +1351,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			bridgePayloadRaw := currentBridgePayload.payloadRaw
 			bridgePayloadBytes := currentBridgePayload.payloadBytes
 			toolOutputCoverage := AnalyzeToolCallOutputContextCoverageBytes(currentBridgePayload.payloadRaw)
-			needsBridgeReplay := !smartStrict && (currentBridgePayload.previousResponseID != "" ||
+			needsBridgeReplay := !smartStateful && (currentBridgePayload.previousResponseID != "" ||
 				(toolOutputCoverage.HasFunctionCallOutput && !toolOutputCoverage.ContextCoversAllCallIDs))
 			// 一次解析当前 input，正常 replay 与 account-failover 两份序列共享同一批正文。
 			bridgeCurrentItems, bridgeCurrentItemsExist, extractErr := openAIWSExtractNormalizedInputSequence(

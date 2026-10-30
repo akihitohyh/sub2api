@@ -454,11 +454,12 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	responseModelObserver := &upstreamResponseModelObserver{}
 
 	strictSession := smartProtocolStrict(ctx)
-	if strictSession && gjson.GetBytes(payload, "store").Type != gjson.True {
+	statefulSession := smartProtocolStateful(ctx)
+	if statefulSession && gjson.GetBytes(payload, "store").Type != gjson.True {
 		return nil, denyOpenAITurn("http_session_requires_storage")
 	}
 
-	body, err := prepareOpenAIWSHTTPBridgeSessionBody(account, payload, strictSession)
+	body, err := prepareOpenAIWSHTTPBridgeSessionBody(account, payload, statefulSession)
 	if err != nil {
 		return nil, fmt.Errorf("prepare http bridge body: %w", err)
 	}
@@ -573,7 +574,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			return nil, buildErr
 		}
 		latest, admissionErr := s.admitOpenAITurn(ctx, c, account, actualModel, body)
-		if admissionErr == nil && strictSession && (latest.ID != account.ID || latest.AuthConnectionID != account.AuthConnectionID || latest.AuthConnectionRevision != account.AuthConnectionRevision || !smartProtocolHTTPSupported(latest)) {
+		if admissionErr == nil && statefulSession && (latest.ID != account.ID || latest.AuthConnectionID != account.AuthConnectionID || latest.AuthConnectionRevision != account.AuthConnectionRevision || !smartProtocolHTTPSupported(latest)) {
 			admissionErr = denyOpenAITurn("authorization_binding_changed")
 		}
 		if admissionErr == nil {

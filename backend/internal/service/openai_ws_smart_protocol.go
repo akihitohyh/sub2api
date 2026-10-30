@@ -15,6 +15,7 @@ import (
 const smartProtocolSessionKey = "openai_smart_protocol_session"
 
 type smartProtocolContextKey struct{}
+type smartProtocolStatefulContextKey struct{}
 
 type openAISmartProtocolDecision struct {
 	Mode            string `json:"mode"`
@@ -38,6 +39,11 @@ type openAISmartProtocolSession struct {
 func smartProtocolStrict(ctx context.Context) bool {
 	v, _ := ctx.Value(smartProtocolContextKey{}).(bool)
 	return v
+}
+
+func smartProtocolStateful(ctx context.Context) bool {
+	value, _ := ctx.Value(smartProtocolStatefulContextKey{}).(bool)
+	return value
 }
 
 // This is positive native bridge evidence, not the scheduler's permissive

@@ -32,7 +32,7 @@ func (s *OpenAIGatewayService) wrapSmartProtocolHooks(ctx context.Context, accou
 			result.UpstreamProtocol = smartSession.Decision.Protocol
 			result.ProtocolDecisionReason = smartSession.Decision.Reason
 			var usageAvailable *bool
-			if smartSession.Decision.Mode != "shadow" && smartSession.Decision.Reason != "legacy_bridge" {
+			if smartSession.Decision.Mode != "shadow" {
 				available := !result.UsageUnavailable
 				usageAvailable = &available
 			}

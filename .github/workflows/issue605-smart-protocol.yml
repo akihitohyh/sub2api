@@ -45,7 +45,7 @@ jobs:
         working-directory: backend
         run: |
           set -euo pipefail
-          go test -race -tags=unit ./internal/service -run '^TestSmartProtocol(HTTPFirstSession|NetworkModes|ConcurrentSticky|NoReplayAndCleanup|ForeignContinuation|TurnGuardBeforeSend|MissingUsageIsUnknown|Legacy15MiB|StatelessRequestRetainsWS|PassthroughNetwork|ToolContinuation)$' -count=3 -timeout=10m -json > "$RUNNER_TEMP/issue605-proof/repeated.jsonl" 2>&1
+          go test -race -tags=unit ./internal/service -run '^TestSmartProtocol(HTTPFirstSession|NetworkModes|ConcurrentSticky|NoReplayAndCleanup|ForeignContinuation|TurnGuardBeforeSend|MissingUsageIsUnknown|Legacy15MiB|StatelessRequestRetainsWS|PassthroughNetwork|ToolContinuation|LegacyNoReplay)$' -count=3 -timeout=10m -json > "$RUNNER_TEMP/issue605-proof/repeated.jsonl" 2>&1
       - name: Actual isolated PostgreSQL Redis repository integration
         working-directory: backend
         run: |
