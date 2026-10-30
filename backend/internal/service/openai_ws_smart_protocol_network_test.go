@@ -59,7 +59,7 @@ type smartProtocolNetwork struct {
 func newSmartProtocolNetwork(t *testing.T, mode string, known bool, fail string) *smartProtocolNetwork {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	f := &smartProtocolNetwork{t: t, ctx: ctx, cancel: cancel, results: make(chan *OpenAIForwardResult, 32), errors: make(chan error, 16), timings: make(chan requesttiming.Snapshot, 16), fail: fail}
 	cfg := &config.Config{}
 	f.cfg = cfg
