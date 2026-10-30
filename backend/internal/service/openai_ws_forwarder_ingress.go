@@ -668,8 +668,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	// forced bridges retain precedence; shadow never changes the active path.
 	var smartSession *openAISmartProtocolSession
 	smartStrict := false
-	legacyBridge := forceHTTPBridge || s.shouldBridgeOpenAIWSPassthroughFirstMessage(account, firstClientMessage)
+	legacyBridge := forceHTTPBridge
 	if s.cfg != nil && s.cfg.Gateway.OpenAIWS.SmartProtocol.Enabled {
+		legacyBridge = forceHTTPBridge || s.shouldBridgeOpenAIWSPassthroughFirstMessage(account, firstClientMessage)
 		var decision openAISmartProtocolDecision
 		if value, ok := c.Get(smartProtocolSessionKey); ok {
 			smartSession, _ = value.(*openAISmartProtocolSession)

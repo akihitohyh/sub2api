@@ -78,6 +78,13 @@ func (s *OpenAIGatewayService) decideOpenAIWSUpstreamProtocol(a *Account, payloa
 		d.Reason = "http_capability_unconfirmed"
 		return d
 	}
+	// Native Codex HTTP normalizes store=false; its ordinary HTTP forwarder
+	// removes previous_response_id. Endpoint support is not chain support.
+	// Stateless CN adapters also delete previous IDs at their final send boundary.
+	if a.Type != AccountTypeAPIKey || a.UsesNativeCNResponses() || gjson.GetBytes(payload, "store").Type != gjson.True {
+		d.Reason = "http_chain_unconfirmed"
+		return d
+	}
 	if strings.TrimSpace(gjson.GetBytes(payload, "previous_response_id").String()) != "" {
 		d.Reason = "existing_chain"
 		return d

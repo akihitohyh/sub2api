@@ -36,7 +36,7 @@ func TestSmartProtocolDecision(t *testing.T) {
 			if tc.known {
 				a.Extra["openai_responses_supported"] = true
 			}
-			payload := []byte(`{"model":"synthetic","max_output_tokens":` + strconv.Itoa(tc.cap) + `,"previous_response_id":"` + tc.previous + `"}`)
+			payload := []byte(`{"model":"synthetic","store":true,"max_output_tokens":` + strconv.Itoa(tc.cap) + `,"previous_response_id":"` + tc.previous + `"}`)
 			d := (&OpenAIGatewayService{cfg: cfg}).decideOpenAIWSUpstreamProtocol(a, payload)
 			require.Equal(t, tc.want, d.Protocol)
 			require.Equal(t, tc.reason, d.Reason)
@@ -106,4 +106,15 @@ func TestSmartProtocolAuthorizationMatrix(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.http, smartProtocolHTTPSupported(tc.account)) })
 	}
+}
+
+func TestSmartProtocolNativeCodexEndpointIsNotChainEvidence(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.HTTPBridgeEnabled = true
+	cfg.Gateway.OpenAIWS.SmartProtocol = config.GatewayOpenAIWSSmartProtocolConfig{Enabled: true, Mode: "http"}
+	a := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"client_id": openai.ClientID}}
+	require.True(t, smartProtocolHTTPSupported(a))
+	decision := (&OpenAIGatewayService{cfg: cfg}).decideOpenAIWSUpstreamProtocol(a, []byte(`{"model":"synthetic","max_output_tokens":8000}`))
+	require.Equal(t, "ws", decision.Protocol)
+	require.Equal(t, "http_chain_unconfirmed", decision.Reason)
 }

@@ -301,6 +301,9 @@ func TestSmartProtocolNetworkModes(t *testing.T) {
 	}{{"ws_first", "auto", true, 100, "ws"}, {"unknown", "auto", false, 8000, "ws"}, {"negative_http", "http", false, 8000, "ws"}, {"manual_ws", "ws", true, 8000, "ws"}, {"manual_http", "http", true, 100, "http"}, {"shadow", "shadow", true, 8000, "ws"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newSmartProtocolNetwork(t, tc.mode, tc.known, "")
+			if tc.name == "negative_http" {
+				f.account.Extra["openai_responses_supported"] = false
+			}
 			c := f.dial()
 			f.send(c, "first", "", tc.cap)
 			id := f.terminal(c)
@@ -348,6 +351,8 @@ func TestSmartProtocolNoReplayAndCleanup(t *testing.T) {
 				case <-f.ctx.Done():
 					t.Fatal("failed turn cleanup stalled")
 				}
+				f.svc.CloseOpenAIWSPool()
+				require.Eventually(t, func() bool { return f.active.Load() == 0 }, 2*time.Second, time.Millisecond, "upstream connections must clean up")
 				require.EqualValues(t, 1, f.httpCalls.Load()+f.wsCalls.Load(), "submitted request must execute exactly once")
 				if failure == "partial_usage" {
 					result := f.result()
@@ -377,7 +382,7 @@ func TestSmartProtocolConcurrentSticky(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			c, _, err := coderws.Dial(f.ctx, "ws"+strings.TrimPrefix(f.ingress.URL, "http"), nil)
+			c, _, err := coderws.Dial(f.ctx, "ws"+strings.TrimPrefix(f.ingress.URL, "http"), &coderws.DialOptions{HTTPHeader: http.Header{"Session-Id": []string{"shared-synthetic"}}})
 			if err != nil {
 				t.Error("loopback dial failed")
 				return
@@ -465,4 +470,14 @@ func TestSmartProtocolMissingUsageIsUnknown(t *testing.T) {
 			require.True(t, f.result().UsageUnavailable)
 		})
 	}
+}
+
+func TestSmartProtocolStatelessRequestRetainsWS(t *testing.T) {
+	f := newSmartProtocolNetwork(t, "http", true, "")
+	c := f.dial()
+	require.NoError(t, c.Write(f.ctx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","input":"first","max_output_tokens":8000,"store":false}`)))
+	f.terminal(c)
+	require.Equal(t, "ws", f.result().UpstreamProtocol)
+	require.EqualValues(t, 1, f.wsCalls.Load())
+	require.Zero(t, f.httpCalls.Load())
 }

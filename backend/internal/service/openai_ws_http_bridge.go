@@ -454,6 +454,10 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	responseModelObserver := &upstreamResponseModelObserver{}
 
 	strictSession := smartProtocolStrict(ctx)
+	if strictSession && gjson.GetBytes(payload, "store").Type != gjson.True {
+		return nil, denyOpenAITurn("http_session_requires_storage")
+	}
+
 	body, err := prepareOpenAIWSHTTPBridgeSessionBody(account, payload, strictSession)
 	if err != nil {
 		return nil, fmt.Errorf("prepare http bridge body: %w", err)

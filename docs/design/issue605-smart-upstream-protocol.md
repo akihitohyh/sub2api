@@ -8,19 +8,19 @@ The downstream remains WebSocket. Select once using the first create payload and
 
 | Authorization / adapter | HTTP evidence | WS evidence / restriction | Smart eligibility |
 | --- | --- | --- | --- |
-| API key, native Responses | Existing successful Responses probe `openai_responses_supported=true`; negative and missing differ | Existing protocol resolver and account WS mode | Both must be positively supported |
-| Native Codex OAuth | Native HTTP Responses request builder exists; OAuth does not imply WS-only | Existing resolver | Native adapter only; no type-wide WS-only assertion |
+| API key, native Responses | Existing successful Responses probe `openai_responses_supported=true`; negative and missing differ; storage semantics must remain intact | Existing protocol resolver and account WS mode | Both must be positively supported; explicit store=true on every turn and no stateless CN adapter |
+| Native Codex OAuth | Native HTTP Responses request builder exists; OAuth does not imply WS-only | Existing resolver | HTTP chain unconfirmed: native compatibility forces store=false and ordinary HTTP forward removes previous ID; retain WS without claiming WS-only |
 | Managed explicit connection | `prepareAuthConnection` selects exact ID/revision; `Supports("responses")` is endpoint capability | Projection currently disables WS mode | Preserve current restriction; never inherit another connection's capabilities |
 | BPS / SIWC / Prism / Copilot / plugin | Specialized HTTP adapters do not establish native bridge compatibility | Existing restrictions | No new routing through specialized adapters |
 | Unknown / identity-only | No positive HTTP evidence | Existing route only, if otherwise valid | Never infer HTTP support |
 
-`SupportsOpenAIEndpointCapability` deliberately treats some unobserved legacy accounts as schedulable; that is not positive HTTP evidence for smart selection. The selected authorization identity is part of history and continuation ownership. No account override is implemented in this first version: no unmanaged `extra` option, no UI/API claim. Global configuration supplies manual controls.
+`SupportsOpenAIEndpointCapability` deliberately treats some unobserved legacy accounts as schedulable; that is not positive HTTP evidence for smart selection. Endpoint support and stateful HTTP chain support are distinct. Smart HTTP requires explicit store=true on every turn; absence or false remains WS at session start, and incompatible later frames fail closed. The router never enables durable upstream storage on behalf of a client that did not request it. Native Codex is HTTP capable, but this revision intentionally does not promote it to HTTP session routing because its adapter is stateless. The selected authorization identity is part of history and continuation ownership. No account override is implemented in this first version: no unmanaged `extra` option, no UI/API claim. Global configuration supplies manual controls.
 
 ## Configuration and compatibility
 
 `gateway.openai_ws.smart_protocol`: `enabled=false`, `mode=auto|shadow|http|ws`, `large_output_threshold=2000`, `long_context_bytes=200000`. Explicit output caps and high effort with long input are heuristics, never empirical p90. Missing configuration retains defaults. Invalid modes/negative thresholds fail validation.
 
-The existing `http_bridge_enabled` remains the HTTP bridge master gate. Existing forced platform/plugin/account HTTP bridge and the 15 MiB compatibility path retain precedence. Disabled and shadow preserve existing routing and retry behavior. Manual `ws` suppresses smart HTTP decisions but retains explicitly configured legacy bridges. Set `enabled=false` to kill new decisions; existing sessions keep their chosen protocol. Config changes apply to new connections only. In-flight requests are never resent as a rollback mechanism.
+The existing `http_bridge_enabled` remains the gate for smart HTTP selection and the payload compatibility bridge; pre-existing forced platform/plugin/account HTTP routes retain their previous independent behavior. Existing forced platform/plugin/account HTTP bridge and the 15 MiB compatibility path retain precedence. Disabled and shadow preserve existing routing and retry behavior. Manual `ws` suppresses smart HTTP decisions but retains explicitly configured legacy bridges. Set `enabled=false` to kill new decisions; existing sessions keep their chosen protocol. Config changes apply to new connections only. In-flight requests are never resent as a rollback mechanism.
 
 ## Prediction and observations
 

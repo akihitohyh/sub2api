@@ -7,7 +7,7 @@ import sys
 root = pathlib.Path(sys.argv[1])
 summary = {}
 with (root / 'whitelist.jsonl').open('w') as out:
-    for name in ('packages', 'integration'):
+    for name in ('packages', 'repeated', 'integration'):
         counts = dict(passed=0, failed=0, skipped=0, smart=0)
         source = root / (name + '.jsonl')
         if source.exists():
