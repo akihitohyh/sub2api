@@ -1,0 +1,62 @@
+name: Issue605 isolated smart upstream protocol
+on:
+  push:
+    branches: [feat/issue605-smart-upstream-protocol]
+  pull_request:
+    branches: [production]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/issue605-smart-protocol.yml'
+      - 'docs/design/issue605-smart-upstream-protocol.md'
+permissions:
+  contents: read
+concurrency:
+  group: issue605-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+jobs:
+  acceptance:
+    if: github.head_ref == 'feat/issue605-smart-upstream-protocol' || github.ref_name == 'feat/issue605-smart-upstream-protocol'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CI: 'true'
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=2'
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Exact source identity
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --exit-code HEAD
+          mkdir -p "$RUNNER_TEMP/issue605-proof"
+          git rev-parse HEAD > "$RUNNER_TEMP/issue605-proof/head.txt"
+      - name: Actual service handler repository packages and race regressions
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          go test -race -tags=unit ./internal/service ./internal/handler ./internal/repository ./internal/pkg/requesttiming -run 'TestSmartProtocol|TestOpenAIWSHTTPBridge|TestOpenAIResponsesWebSocket|TestOpenAIWSTurn|TestOpenAIWSFirstTurn|TestTimingWrite|TestTimingBinding' -count=1 -timeout=20m -json > "$RUNNER_TEMP/issue605-proof/packages.jsonl" 2>&1
+      - name: Actual isolated PostgreSQL Redis repository integration
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          go test -race -tags=integration ./internal/repository -run 'TestSmartProtocol|TestUsageBillingRepositoryApply|TestOpenAIAuthConnection' -count=1 -timeout=15m -json > "$RUNNER_TEMP/issue605-proof/integration.jsonl" 2>&1
+      - name: Whitelist evidence and reject skip or empty acceptance
+        if: always()
+        run: python3 .github/scripts/issue605-proof.py "$RUNNER_TEMP/issue605-proof"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: issue605-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/issue605-proof/head.txt
+            ${{ runner.temp }}/issue605-proof/summary.json
+            ${{ runner.temp }}/issue605-proof/whitelist.jsonl
+          if-no-files-found: error

@@ -279,6 +279,9 @@ type OpenAIForwardResult struct {
 	RequestedReasoningEffort *string
 	Stream                   bool
 	OpenAIWSMode             bool
+	UpstreamProtocol         string
+	ProtocolDecisionReason   string
+	FirstUpstreamEventMs     *int
 	// UpstreamTerminalEvent is the normalized terminal event observed on an
 	// upstream Responses WebSocket turn. Empty preserves legacy/non-WS success.
 	UpstreamTerminalEvent string
@@ -469,6 +472,7 @@ var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /r
 
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
+	smartProtocolHistory    openAISmartProtocolHistory
 	requestTimezoneEgress   openAIRequestTimezoneEgress
 	requestTimezoneProber   ProxyExitInfoProber
 	stopAstraSetup          func()

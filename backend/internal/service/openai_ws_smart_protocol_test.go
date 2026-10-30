@@ -1,0 +1,89 @@
+package service
+
+import (
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/stretchr/testify/require"
+)
+
+func TestSmartProtocolDecision(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, previous   string
+		enabled, bridge, known bool
+		cap                    int
+		want, reason           string
+	}{
+		{"disabled", "auto", "", false, true, true, 8000, "ws", "disabled"},
+		{"unknown", "http", "", true, true, false, 8000, "ws", "http_capability_unconfirmed"},
+		{"ws_only", "http", "", true, true, false, 0, "ws", "http_capability_unconfirmed"},
+		{"manual_http", "http", "", true, true, true, 0, "http", "manual_http"},
+		{"manual_ws", "ws", "", true, true, true, 8000, "ws", "manual_ws"},
+		{"shadow", "shadow", "", true, true, true, 8000, "ws", "large_output_cap"},
+		{"auto", "auto", "", true, true, true, 8000, "http", "large_output_cap"},
+		{"small", "auto", "", true, true, true, 100, "ws", "small_or_unknown"},
+		{"chain", "http", "resp_prior", true, true, true, 8000, "ws", "existing_chain"},
+		{"kill_bridge", "http", "", true, false, true, 8000, "ws", "bridge_disabled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Gateway.OpenAIWS.HTTPBridgeEnabled = tc.bridge
+			cfg.Gateway.OpenAIWS.SmartProtocol = config.GatewayOpenAIWSSmartProtocolConfig{Enabled: tc.enabled, Mode: tc.mode}
+			a := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Extra: map[string]any{}}
+			if tc.known {
+				a.Extra["openai_responses_supported"] = true
+			}
+			payload := []byte(`{"model":"synthetic","max_output_tokens":` + strconv.Itoa(tc.cap) + `,"previous_response_id":"` + tc.previous + `"}`)
+			d := (&OpenAIGatewayService{cfg: cfg}).decideOpenAIWSUpstreamProtocol(a, payload)
+			require.Equal(t, tc.want, d.Protocol)
+			require.Equal(t, tc.reason, d.Reason)
+			if tc.name == "shadow" {
+				require.Equal(t, "http", d.Candidate)
+				require.Equal(t, "heuristic_cap", d.Source)
+				require.Zero(t, d.PredictedOutput)
+			}
+		})
+	}
+	t.Run("native codex supports HTTP", func(t *testing.T) {
+		require.True(t, smartProtocolHTTPSupported(&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"client_id": openai.ClientID}}))
+	})
+}
+
+func TestSmartProtocolHistory(t *testing.T) {
+	var h openAISmartProtocolHistory
+	a := &Account{ID: 1}
+	payload := []byte(`{"model":"synthetic","reasoning":{"effort":"max"}}`)
+	key := smartProtocolKey(a, payload, "ws")
+	now := time.Now()
+	for i := 1; i <= 19; i++ {
+		h.observe(key, i*100, now)
+	}
+	p, n := h.p90(key, now)
+	require.Zero(t, p)
+	require.Equal(t, 19, n)
+	h.observe(key, 2000, now)
+	p, n = h.p90(key, now)
+	require.Equal(t, 1800, p)
+	require.Equal(t, 20, n)
+	other := key
+	other.Protocol = "http"
+	_, n = h.p90(other, now)
+	require.Zero(t, n)
+	other = key
+	other.ConnectionID = "another"
+	_, n = h.p90(other, now)
+	require.Zero(t, n)
+	other = key
+	other.Model = "different"
+	_, n = h.p90(other, now)
+	require.Zero(t, n)
+	_, n = h.p90(key, now.Add(16*time.Minute))
+	require.Zero(t, n)
+	for i := 0; i < 200; i++ {
+		h.observe(key, i+1, now)
+	}
+	require.Len(t, h.buckets[key], 128)
+}

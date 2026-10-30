@@ -1,0 +1,49 @@
+# Issue 605: conservative session upstream routing
+
+Refs #605 and https://github.com/ranxi2001/sub2api/issues/605#issuecomment-6528507177 . Baseline: 77455cf755fa0f119367b911704f11df88e7917e. This is a Draft implementation/acceptance record, not a performance claim.
+
+## Contract and adapter evidence
+
+The downstream remains WebSocket. Select once using the first create payload and the actual selected authorization, then keep that upstream protocol until disconnect. HTTP-first continuation is HTTP-to-HTTP, never permission to migrate a WS chain. No mid-session migration, timeout fallback, replay after submission, paid probes or A/B traffic.
+
+| Authorization / adapter | HTTP evidence | WS evidence / restriction | Smart eligibility |
+| --- | --- | --- | --- |
+| API key, native Responses | Existing successful Responses probe `openai_responses_supported=true`; negative and missing differ | Existing protocol resolver and account WS mode | Both must be positively supported |
+| Native Codex OAuth | Native HTTP Responses request builder exists; OAuth does not imply WS-only | Existing resolver | Native adapter only; no type-wide WS-only assertion |
+| Managed explicit connection | `prepareAuthConnection` selects exact ID/revision; `Supports("responses")` is endpoint capability | Projection currently disables WS mode | Preserve current restriction; never inherit another connection's capabilities |
+| BPS / SIWC / Prism / Copilot / plugin | Specialized HTTP adapters do not establish native bridge compatibility | Existing restrictions | No new routing through specialized adapters |
+| Unknown / identity-only | No positive HTTP evidence | Existing route only, if otherwise valid | Never infer HTTP support |
+
+`SupportsOpenAIEndpointCapability` deliberately treats some unobserved legacy accounts as schedulable; that is not positive HTTP evidence for smart selection. The selected authorization identity is part of history and continuation ownership. No account override is implemented in this first version: no unmanaged `extra` option, no UI/API claim. Global configuration supplies manual controls.
+
+## Configuration and compatibility
+
+`gateway.openai_ws.smart_protocol`: `enabled=false`, `mode=auto|shadow|http|ws`, `large_output_threshold=2000`, `long_context_bytes=200000`. Explicit output caps and high effort with long input are heuristics, never empirical p90. Missing configuration retains defaults. Invalid modes/negative thresholds fail validation.
+
+The existing `http_bridge_enabled` remains the HTTP bridge master gate. Existing forced platform/plugin/account HTTP bridge and the 15 MiB compatibility path retain precedence. Disabled and shadow preserve existing routing and retry behavior. Manual `ws` suppresses smart HTTP decisions but retains explicitly configured legacy bridges. Set `enabled=false` to kill new decisions; existing sessions keep their chosen protocol. Config changes apply to new connections only. In-flight requests are never resent as a rollback mechanism.
+
+## Prediction and observations
+
+Reuse successful turn usage rather than sending samples. Keep a process-local bounded 15-minute window keyed by account, authorization identity/revision, mapped model, effort and actual upstream protocol. Require 20 samples for empirical nearest-rank p90; cold start is explicitly heuristic/unknown. Bound buckets and samples; no timer, new background worker, persistent prompt data or unbounded label cardinality. Restart loses history and returns to cold start. No quality ratio, feedback sampling, client profiling, account override, region inference or performance proof in this version.
+
+Ingress protocol, actual upstream protocol, decision reason, candidate protocol and prediction source must remain separate. First upstream event measures a lifecycle event; first actual content uses the established token-event classifier. Neither missing measurement nor absent legacy metadata means zero. Reuse optional request timing persistence for the decision; old rows remain absent without migration. Logs use only enums, numeric IDs/counts and durations, never bodies, model strings supplied by users, URLs, credentials or email.
+
+## Guard and risk review
+
+HTTP bridge already performs `admitOpenAITurn` and ticket validation for every request, then `doOpenAIUpstream` performs authorization fencing, RPM, regional billing, priority and safety guards at the final send boundary. WS performs admission/binding validation, RPM, regional and priority guards before write. Handler hooks own API-key/account slots, revalidation, frozen pricing and usage completion. Preserve these hooks and verify actual packages compile.
+
+The legacy bridge strips previous IDs and rebuilds input. Smart HTTP must preserve the original previous ID, reject foreign continuation IDs and retain the same account/authorization identity. Smart requests must bypass rejected-field resubmission and first-output failover. No output is not evidence of no execution or billing. Partial/failed streams must still retain observed usage and release resources.
+
+| Risk / acceptance | Planned real test | Current status |
+| --- | --- | --- |
+| HTTP-first multi-turn, previous ID preserved, tools streamed | `TestSmartProtocolHTTPFirstSession` real WS ingress + HTTP SSE upstream | Pending |
+| WS-first, WS-only/unknown, manual, shadow, legacy 15 MiB | `TestSmartProtocol*` decision + real network sessions | Pending |
+| Sticky despite request/config changes; concurrent independent sessions | Real network multi-turn/race suite | Pending |
+| No duplicate execution on HTTP/WS errors, EOF, cancellation | Real transport counters, resource cleanup | Pending |
+| Account/authorization and continuation ownership, send-time revocation | Real service/handler admission regressions + isolated PG/Redis | Pending |
+| Billing/pricing/concurrency/usage readback | Actual handler and repository suites with isolated PG/Redis | Pending |
+| Prediction dimensions, cold start, bounds and sample minimum | History regression tests, timing persistence readback | Pending |
+| Actual service/handler/repository compilation | Package-based remote Go tests; file-list substitutes prohibited | Pending |
+| Production latency/cache/quality goals | No authorized production or paid traffic | Not implemented / not claimed |
+
+All dynamic acceptance runs exclusively in disposable GitHub Actions environments with synthetic loopback HTTP/WS/SSE and isolated PostgreSQL/Redis. Local work is limited to source inspection, formatting and diff checks. Final evidence must bind every check to exact head, include paginated check runs and legacy statuses, preserve run URLs and sanitized logs, and reject skipped/no-test results as acceptance.
