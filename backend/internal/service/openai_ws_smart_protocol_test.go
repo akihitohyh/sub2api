@@ -2,6 +2,7 @@ package service
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,4 +118,30 @@ func TestSmartProtocolNativeCodexEndpointIsNotChainEvidence(t *testing.T) {
 	decision := (&OpenAIGatewayService{cfg: cfg}).decideOpenAIWSUpstreamProtocol(a, []byte(`{"model":"synthetic","max_output_tokens":8000}`))
 	require.Equal(t, "ws", decision.Protocol)
 	require.Equal(t, "http_chain_unconfirmed", decision.Reason)
+}
+
+func TestSmartProtocolPredictionSources(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.HTTPBridgeEnabled = true
+	cfg.Gateway.OpenAIWS.SmartProtocol = config.GatewayOpenAIWSSmartProtocolConfig{Enabled: true, Mode: "auto"}
+	a := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Extra: map[string]any{"openai_responses_supported": true}}
+	svc := &OpenAIGatewayService{cfg: cfg}
+	payload := []byte(`{"model":"synthetic","store":true,"reasoning":{"effort":"xhigh"},"input":"` + strings.Repeat("x", 200000) + `"}`)
+	d := svc.decideOpenAIWSUpstreamProtocol(a, payload)
+	require.Equal(t, "http", d.Protocol)
+	require.Equal(t, "heuristic_context", d.Source)
+	require.Zero(t, d.PredictedOutput)
+	small := []byte(`{"model":"synthetic","store":true,"reasoning":{"effort":"xhigh"},"input":"small"}`)
+	key := smartProtocolKey(a, small, "ws")
+	for i := 0; i < 19; i++ {
+		svc.smartProtocolHistory.observe(key, 8000, time.Now())
+	}
+	d = svc.decideOpenAIWSUpstreamProtocol(a, small)
+	require.Equal(t, "ws", d.Protocol)
+	require.Equal(t, "cold_start", d.Source)
+	svc.smartProtocolHistory.observe(key, 8000, time.Now())
+	d = svc.decideOpenAIWSUpstreamProtocol(a, small)
+	require.Equal(t, "http", d.Protocol)
+	require.Equal(t, "empirical_p90", d.Source)
+	require.Equal(t, 8000, d.PredictedOutput)
 }

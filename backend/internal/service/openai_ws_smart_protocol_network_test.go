@@ -522,3 +522,29 @@ func TestSmartProtocolPassthroughNetwork(t *testing.T) {
 		})
 	}
 }
+
+func TestSmartProtocolToolContinuation(t *testing.T) {
+	for _, mode := range []string{"http", "ws"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newSmartProtocolNetwork(t, mode, true, "")
+			c := f.dial()
+			require.NoError(t, c.Write(f.ctx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","input":"first","store":true,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{}}}]}`)))
+			id := f.terminal(c)
+			f.result()
+			require.EqualValues(t, 1, f.toolEvents.Load())
+			raw, _ := json.Marshal(map[string]any{"type": "response.create", "model": "gpt-5.1", "store": true, "previous_response_id": id, "input": []map[string]any{{"type": "function_call_output", "call_id": "call_synthetic", "output": "synthetic result"}}})
+			require.NoError(t, c.Write(f.ctx, coderws.MessageText, raw))
+			f.terminal(c)
+			f.result()
+			f.mu.Lock()
+			body := append([]byte(nil), f.bodies[1]...)
+			f.mu.Unlock()
+			require.Equal(t, id, gjson.GetBytes(body, "previous_response_id").String())
+			input := gjson.GetBytes(body, "input").Array()
+			require.Len(t, input, 1)
+			require.Equal(t, "function_call_output", input[0].Get("type").String())
+			require.Equal(t, "call_synthetic", input[0].Get("call_id").String())
+			require.EqualValues(t, 2, f.httpCalls.Load()+f.wsCalls.Load())
+		})
+	}
+}
