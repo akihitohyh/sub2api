@@ -11,7 +11,7 @@ network = [
     'HTTPFirstSession', 'NetworkModes', 'ConcurrentSticky', 'NoReplayAndCleanup',
     'ForeignContinuation', 'TurnGuardBeforeSend', 'MissingUsageIsUnknown',
     'Legacy15MiB', 'StatelessRequestRetainsWS', 'PassthroughNetwork',
-    'ToolContinuation', 'LegacyNoReplay', 'ActualContentNetwork', 'PassthroughNoReplay',
+    'ToolContinuation', 'LegacyNoReplay', 'ActualContentNetwork', 'PassthroughNoReplay', 'PassthroughPartialUsage',
 ]
 legacy = 'TestOpenAIWSHTTPBridgeAcceptsFirstFrameAboveLegacy16MiB'
 required = {
@@ -20,6 +20,7 @@ required = {
     'repeated': {(service, 'TestSmartProtocol' + n): 3 for n in network},
     'integration': {(service.replace('/service', '/repository'), n): 1 for n in [
         'TestSmartProtocolGatewayBillingAndQuotaIntegration', 'TestSmartProtocolTimingAndOwnershipReadback',
+        'TestSmartProtocolPassthroughPartialBilling',
         'TestUsageBillingRepositoryApply_DeduplicatesBalanceBilling',
         'TestUsageBillingRepositoryApply_UpdatesAccountQuota',
         'TestSharedAccountAndUserConcurrencyAcrossIndependentClients',

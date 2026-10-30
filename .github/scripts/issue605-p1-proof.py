@@ -54,12 +54,20 @@ with (root / 'whitelist.jsonl').open('w') as out:
         prefix = 'TestSmartProtocolPassthroughPartialUsage' if phase == 'service' else 'TestSmartProtocolPassthroughPartialBilling'
         eof = prefix + ('/p1_eof/prior_false' if phase == 'service' else '/eof/prior_false')
         marker = 'P1_CURRENT_TURN_USAGE_LOST' if phase == 'service' else 'P1_AUTHORITATIVE_USAGE_NOT_BILLED'
+        endings = ('p1_eof', 'p1_cancel', 'p1_drain', 'p1_control') if phase == 'service' else ('eof', 'client_cancel', 'drain_timeout', 'control_cancel')
+        cases = [prefix + '/' + end + '/prior_' + prior for end in endings for prior in ('false', 'true')]
         if mode == 'red':
-            if actions.get(eof) != 'fail' or marker not in markers[eof]:
-                problems.append(phase + ': intended observed-usage assertion RED missing')
+            for case in cases:
+                if actions.get(case) != 'fail' or marker not in markers[case]:
+                    problems.append(phase + ': intended observed-usage assertion RED missing: ' + case)
         else:
             if actions.get(prefix) != 'pass' or counts['fail'] or not counts['pass']:
                 problems.append(phase + ': GREEN missing or failing')
+            if phase == 'integration':
+                cases += [prefix + '/' + name + '/prior_false' for name in ('missing_usage', 'normal_terminal', 'terminal_error')]
+            for case in cases:
+                if actions.get(case) != 'pass':
+                    problems.append(phase + ': GREEN case missing: ' + case)
         if counts['skip']:
             problems.append(phase + ': skipped tests')
         summary[phase] = dict(counts=counts, actions=actions, assertion_markers={k: sorted(v) for k, v in markers.items()})

@@ -47,7 +47,7 @@ jobs:
         working-directory: backend
         run: |
           set -euo pipefail
-          go test -race -tags=unit ./internal/service -run '^TestSmartProtocol(HTTPFirstSession|NetworkModes|ConcurrentSticky|NoReplayAndCleanup|ForeignContinuation|TurnGuardBeforeSend|MissingUsageIsUnknown|Legacy15MiB|StatelessRequestRetainsWS|PassthroughNetwork|ToolContinuation|LegacyNoReplay|ActualContentNetwork|PassthroughNoReplay)$' -count=3 -timeout=10m -json > "$RUNNER_TEMP/issue605-proof/repeated.jsonl" 2>&1
+          go test -race -tags=unit ./internal/service -run '^TestSmartProtocol(HTTPFirstSession|NetworkModes|ConcurrentSticky|NoReplayAndCleanup|ForeignContinuation|TurnGuardBeforeSend|MissingUsageIsUnknown|Legacy15MiB|StatelessRequestRetainsWS|PassthroughNetwork|ToolContinuation|LegacyNoReplay|ActualContentNetwork|PassthroughNoReplay|PassthroughPartialUsage)$' -count=3 -timeout=10m -json > "$RUNNER_TEMP/issue605-proof/repeated.jsonl" 2>&1
       - name: Actual isolated PostgreSQL Redis repository integration
         if: ${{ !cancelled() }}
         working-directory: backend
@@ -64,7 +64,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          baseline=dc3d41441ba914b25d7f26c49618c25a1df99e77
+          baseline=c81e2a9e735c5fc53c7175448d29441cb777a143
           baseline_tree="$RUNNER_TEMP/issue605-baseline"
           git fetch --no-tags --depth=1 origin "$baseline"
           git worktree add --detach "$baseline_tree" "$baseline"

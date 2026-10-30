@@ -80,3 +80,50 @@ jobs:
             ${{ runner.temp }}/issue605-p1-red/summary.json
             ${{ runner.temp }}/issue605-p1-red/whitelist.jsonl
           if-no-files-found: error
+  repaired-green:
+    needs: intended-red
+    if: github.head_ref == 'feat/issue605-smart-upstream-protocol'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: 'true'
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=2'
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Exact repaired source
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --exit-code HEAD
+          mkdir -p "$RUNNER_TEMP/issue605-p1-green"
+          git rev-parse HEAD > "$RUNNER_TEMP/issue605-p1-green/source-head.txt"
+          for path in backend/internal/service/openai_ws_v2/passthrough_relay.go backend/internal/service/openai_ws_v2_passthrough_adapter.go backend/internal/handler/openai_gateway_handler.go; do
+            git hash-object "$path" >> "$RUNNER_TEMP/issue605-p1-green/production-blobs.txt"
+          done
+      - name: GREEN actual service current-turn result
+        working-directory: backend
+        run: go test -race -tags=unit ./internal/service -run '^TestSmartProtocolPassthroughPartialUsage$' -count=1 -timeout=10m -json > "$RUNNER_TEMP/issue605-p1-green/service.jsonl" 2>&1
+      - name: GREEN authenticated handler PG Redis exact billing
+        if: ${{ !cancelled() }}
+        working-directory: backend
+        run: go test -race -tags=integration ./internal/repository -run '^TestSmartProtocolPassthroughPartialBilling$' -count=1 -timeout=10m -json > "$RUNNER_TEMP/issue605-p1-green/integration.jsonl" 2>&1
+      - name: Require complete per-case GREEN
+        if: always()
+        run: timeout 120s python3 .github/scripts/issue605-p1-proof.py green "$RUNNER_TEMP/issue605-p1-green"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: issue605-p1-green-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/issue605-p1-green/*.txt
+            ${{ runner.temp }}/issue605-p1-green/summary.json
+            ${{ runner.temp }}/issue605-p1-green/whitelist.jsonl
+          if-no-files-found: error

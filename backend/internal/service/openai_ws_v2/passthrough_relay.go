@@ -35,6 +35,10 @@ type Usage struct {
 }
 
 type RelayResult struct {
+	// UnfinishedTurn is the active turn only, observed after both relay readers
+	// join. It is never session-aggregate usage or a synthetic terminal callback.
+	UnfinishedTurn *RelayTurnResult
+
 	RequestModel          string
 	ResponseModel         string
 	ResponseModelConflict bool
@@ -408,6 +412,7 @@ func Relay(
 	readers.Wait()
 
 	emitTurnComplete(options.OnTurnComplete, state, finalizePendingBareError(state, nowFn()))
+	result.UnfinishedTurn = snapshotUnfinishedRelayTurn(state, nowFn())
 	enrichResult(&result, state, nowFn().Sub(startAt))
 	result.ClientToUpstreamFrames = clientToUpstreamFrames.Load()
 	result.UpstreamToClientFrames = upstreamToClientFrames.Load()
@@ -1347,6 +1352,31 @@ func openAICacheCreationTokensFromUsage(value gjson.Result) int {
 		}
 	}
 	return 0
+}
+
+// Called only after reader join and pending bare-error settlement. A normal
+// terminal already consumed its timing/usage; it must not be charged again.
+func snapshotUnfinishedRelayTurn(state *relayState, now time.Time) *RelayTurnResult {
+	if state == nil || !state.hasUnfinishedTurn() {
+		return nil
+	}
+	result := &RelayTurnResult{RequestModel: state.currentRequestModel(), RequestID: openAIWSRelayActiveTurnID(state), UsageObserved: state.turnUsageObserved}
+	// An absent/malformed usage object remains unknown, never a zero estimate.
+	if result.UsageObserved {
+		result.Usage = state.turnUsage
+	}
+	if timing := state.activeTurn; timing != nil {
+		result.StartedAt = timing.startAt
+		result.Duration = max(time.Duration(0), now.Sub(timing.startAt))
+		result.ResponseModel = relayTurnResponseModel(timing)
+		result.ResponseModelConflict = timing.responseModelConflict
+		result.ResponseServiceTier = timing.terminalResponseServiceTier
+		result.FirstTokenMs = openAIWSRelayCloneIntPtr(timing.firstTokenMs)
+		result.FirstUpstreamEventMs = openAIWSRelayCloneIntPtr(timing.firstUpstreamEventMs)
+		result.FirstActualContentMs = openAIWSRelayCloneIntPtr(timing.firstActualContentMs)
+		result.FirstActualContentKind = timing.firstActualContentKind
+	}
+	return result
 }
 
 func enrichResult(result *RelayResult, state *relayState, duration time.Duration) {
