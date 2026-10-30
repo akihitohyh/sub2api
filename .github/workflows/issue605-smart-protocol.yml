@@ -41,7 +41,7 @@ jobs:
         working-directory: backend
         run: |
           set -euo pipefail
-          go test -race -tags=unit ./internal/service ./internal/handler ./internal/repository ./internal/pkg/requesttiming ./internal/pkg/openai ./internal/service/openai_ws_v2 -run 'TestSmartProtocol|TestOpenAIWSHTTPBridge|TestOpenAIResponsesWebSocket|TestOpenAIWSTurn|TestOpenAIWSFirstTurn|TestTimingWrite|TestTimingBinding|TestOpenAITurnAdmission|TestOpenAIWSKeyAdmission|TestIssue594SIWCFinalEgress|TestRelay|TestObserveUpstream|TestParseUsage' -count=1 -timeout=20m -json > "$RUNNER_TEMP/issue605-proof/packages.jsonl" 2>&1
+          go test -race -tags=unit ./internal/service ./internal/handler ./internal/repository ./internal/pkg/requesttiming ./internal/pkg/openai ./internal/service/openai_ws_v2 -run 'TestSmartProtocol|TestAccountConnectionTiming|TestOpenAIWSHTTPBridge|TestOpenAIResponsesWebSocket|TestOpenAIWSTurn|TestOpenAIWSFirstTurn|TestTimingWrite|TestTimingBinding|TestOpenAITurnAdmission|TestOpenAIWSKeyAdmission|TestIssue594SIWCFinalEgress|TestRelay|TestObserveUpstream|TestParseUsage' -count=1 -timeout=20m -json > "$RUNNER_TEMP/issue605-proof/packages.jsonl" 2>&1
       - name: Repeat real network lifecycle and sticky sessions three times
         if: ${{ !cancelled() }}
         working-directory: backend
@@ -64,7 +64,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          baseline=77455cf755fa0f119367b911704f11df88e7917e
+          baseline=dc3d41441ba914b25d7f26c49618c25a1df99e77
           baseline_tree="$RUNNER_TEMP/issue605-baseline"
           git fetch --no-tags --depth=1 origin "$baseline"
           git worktree add --detach "$baseline_tree" "$baseline"

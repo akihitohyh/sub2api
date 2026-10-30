@@ -28,6 +28,8 @@ required = {
     'legacy-baseline': {(service, legacy): 1},
 }
 required['packages'].update({
+    (service, 'TestAccountConnectionTimingLifecycle'): 1,
+    ('github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming', 'TestAccountConnectionTimingClockAndPrivacy'): 1,
     ('github.com/Wei-Shaw/sub2api/internal/pkg/openai', 'TestSmartProtocolContentClassification'): 1,
     ('github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming', 'TestSmartProtocolTimingSnapshotCompatibility'): 1,
     ('github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming', 'TestSmartProtocolTurnTimingBoundAndOwnership'): 1,

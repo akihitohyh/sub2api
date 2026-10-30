@@ -1,6 +1,6 @@
 # Issue 605: conservative session upstream routing
 
-Refs #605 and https://github.com/ranxi2001/sub2api/issues/605#issuecomment-6528507177 . Baseline: 77455cf755fa0f119367b911704f11df88e7917e. This is a Draft implementation/acceptance record, not a performance claim.
+Refs #605 and https://github.com/ranxi2001/sub2api/issues/605#issuecomment-6528507177 . Original baseline: 77455cf755fa0f119367b911704f11df88e7917e. Current production baseline: dc3d41441ba914b25d7f26c49618c25a1df99e77 (#602, integrated by ordinary merge; no rebase). This is a Draft implementation/acceptance record, not a performance claim.
 
 ## Contract and adapter evidence
 
@@ -69,6 +69,15 @@ Preserve `OpenAIWSIngressHooks.BeforePayloadParse(turn, raw, effectiveModel)` fo
 
 - Nonempty content: separate `FirstActualContentMs` / kind (`visible_text`, `reasoning_text`, `tool_input`, `media`) from first upstream event and legacy `FirstTokenMs`. Empty/null/object or unknown metadata deltas and encrypted reasoning alone do not count. Reasoning/tool input are semantic content, not a claim of first visible text. `TestSmartProtocolContentClassification` plus `ActualContentNetwork` exercise HTTP, native WS and passthrough; pending exact candidate execution.
 - Passthrough: `PassthroughNetwork`, `PassthroughNoReplay` and the content network family must actually execute. Timing and cancellation/EOF/failure counters cannot be certified by ctx_pool tests.
-- Legacy: prior evidence only located the 10s client read assertion. Increasing a deadline is not a proven root-cause analysis. The full 17 MiB test now submits exactly once to a real loopback HTTP/SSE server, retains payload/terminal/usage assertions, and emits bounded stage durations. The identical test and probe run against full candidate and full 77455cf75 baseline service packages; only test files are transplanted. This is package integration, never a file-list replacement. All results remain pending.
+- Legacy: prior evidence only located the 10s client read assertion. Increasing a deadline is not a proven root-cause analysis. The full 17 MiB test now submits exactly once to a real loopback HTTP/SSE server, retains payload/terminal/usage assertions, and emits bounded stage durations. The identical test and probe run against full candidate and full dc3d41441 baseline service packages; only test files are transplanted. This is package integration, never a file-list replacement. All results remain pending.
 - CI proof: whitelist compiler diagnostics, error classes, race/panic and source locations; retain per-phase JSON evidence and require every named smart family, all six actual packages, three network rounds, both new PG/Redis integrations and both legacy lifecycles. No skip/no-test substitution is accepted.
 - Model disclosure: rollout confirms this sole Codex CLI writer is `gpt-6.1-sol`, reasoning `xhigh`. Parent Hermes model/configuration remains unknown. No code subagents were started.
+
+
+## Updated production integration and source self-review
+
+Parent authorized integrating production after #602 merged at `dc3d41441ba914b25d7f26c49618c25a1df99e77`. Ordinary merge `ffdedceabf016d897aa5330ad8c8c0124bcf613e` has parents `b633ca92597b44126ecba5a6f152e547e8a1b465` and that production SHA; no conflicts, rebase or force push. #602 account-connection timing remains unchanged. In the only common collector file, its injectable clock and event timing coexist with this branch's optional protocol/turn fields and independent snapshot copies. Explicit `TestAccountConnectionTimingLifecycle` and `TestAccountConnectionTimingClockAndPrivacy` are required in the remote actual-package run. The identical legacy package comparison now uses this new production base.
+
+Source self-review focused on the shared merge and changed request/measurement/settlement boundaries: disabled/shadow preserve legacy routing; active decisions stay session-local; stateful HTTP retains same-protocol IDs and storage intent; strict submitted attempts cannot replay; real guards and handler slot/pricing hooks remain on send; authoritative partial usage reaches settlement once; missing usage remains unknown; new content measurements are separate from legacy first-token semantics. Synthetic DB fixtures now clean only their own rows and final HTTP transport is restricted to its loopback fixture host. These are source observations, not dynamic proof. Exact-head execution of all required families, repeated networks, PG/Redis and legacy base/head comparison remains pending.
+
+PR #607's nested isolation is independently owned. No code is copied from that branch or its worktree. Future integration must preserve its original identity checks, the immutable inbound interface described above, and existing admission locations. Parent remains the sole PR merge owner; independent parent source review and final authorization remain outstanding even after CI succeeds.
