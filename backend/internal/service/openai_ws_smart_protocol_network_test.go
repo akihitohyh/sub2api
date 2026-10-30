@@ -35,33 +35,34 @@ func (u smartProtocolNetworkHTTP) DoWithTLS(r *http.Request, p string, a int64, 
 }
 
 type smartProtocolNetwork struct {
-	t          *testing.T
-	cfg        *config.Config
-	svc        *OpenAIGatewayService
-	account    *Account
-	upstream   *httptest.Server
-	ingress    *httptest.Server
-	ctx        context.Context
-	cancel     context.CancelFunc
-	httpCalls  atomic.Int32
-	wsCalls    atomic.Int32
-	active     atomic.Int32
-	mu         sync.Mutex
-	bodies     [][]byte
-	results    chan *OpenAIForwardResult
-	errors     chan error
-	timings    chan requesttiming.Snapshot
-	onTurn     func(int)
-	beforeTurn func(int) error
-	toolEvents atomic.Int32
-	fail       string
+	t              *testing.T
+	cfg            *config.Config
+	svc            *OpenAIGatewayService
+	account        *Account
+	upstream       *httptest.Server
+	ingress        *httptest.Server
+	ctx            context.Context
+	cancel         context.CancelFunc
+	httpCalls      atomic.Int32
+	wsCalls        atomic.Int32
+	active         atomic.Int32
+	mu             sync.Mutex
+	bodies         [][]byte
+	results        chan *OpenAIForwardResult
+	errors         chan error
+	timings        chan requesttiming.Snapshot
+	onTurn         func(int)
+	beforeTurn     func(int) error
+	toolEvents     atomic.Int32
+	fail           string
+	partialRelease chan struct{}
 }
 
 func newSmartProtocolNetwork(t *testing.T, mode string, known bool, fail string) *smartProtocolNetwork {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	f := &smartProtocolNetwork{t: t, ctx: ctx, cancel: cancel, results: make(chan *OpenAIForwardResult, 32), errors: make(chan error, 16), timings: make(chan requesttiming.Snapshot, 16), fail: fail}
+	f := &smartProtocolNetwork{t: t, ctx: ctx, cancel: cancel, results: make(chan *OpenAIForwardResult, 32), errors: make(chan error, 16), timings: make(chan requesttiming.Snapshot, 16), fail: fail, partialRelease: make(chan struct{})}
 	cfg := &config.Config{}
 	f.cfg = cfg
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
@@ -100,7 +101,14 @@ func newSmartProtocolNetwork(t *testing.T, mode string, known bool, fail string)
 						return
 					}
 				}
-				if fail == "eof" || fail == "partial_usage" {
+				if fail == "eof" || fail == "partial_usage" || (fail == "p1_eof" && gjson.GetBytes(body, "input").String() == "partial") {
+					return
+				}
+				if fail == "p1_cancel" && gjson.GetBytes(body, "input").String() == "partial" {
+					select {
+					case <-f.partialRelease:
+					case <-ctx.Done():
+					}
 					return
 				}
 			}
@@ -207,6 +215,9 @@ func (f *smartProtocolNetwork) events(body []byte) []string {
 		return append(events, `{"type":"response.output_text.delta","delta":""}`, fmt.Sprintf(`{"type":"response.completed","response":{"id":%q,"status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":0}}}`, id))
 	}
 
+	if strings.HasPrefix(f.fail, "p1_") && seed == "partial" {
+		return append(events, `{"type":"response.in_progress","response":{"id":"resp_partial","usage":{"input_tokens":3,"output_tokens":2}}}`)
+	}
 	if f.fail == "partial_usage" {
 		return append(events, `{"type":"response.in_progress","response":{"id":"resp_partial","usage":{"input_tokens":3,"output_tokens":2}}}`)
 	}
