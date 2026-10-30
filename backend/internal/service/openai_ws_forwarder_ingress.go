@@ -670,11 +670,25 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	smartStrict := false
 	legacyBridge := forceHTTPBridge || s.shouldBridgeOpenAIWSPassthroughFirstMessage(account, firstClientMessage)
 	if s.cfg != nil && s.cfg.Gateway.OpenAIWS.SmartProtocol.Enabled {
-		decision := s.decideOpenAIWSUpstreamProtocol(account, firstClientMessage)
-		if legacyBridge {
-			decision.Protocol, decision.Candidate, decision.Reason = "http", "http", "legacy_bridge"
+		var decision openAISmartProtocolDecision
+		if value, ok := c.Get(smartProtocolSessionKey); ok {
+			smartSession, _ = value.(*openAISmartProtocolSession)
 		}
-		smartSession = &openAISmartProtocolSession{Decision: decision, AccountID: account.ID, ConnectionID: account.AuthConnectionID, Revision: account.AuthConnectionRevision}
+		if smartSession != nil {
+			if smartSession.AccountID != account.ID || smartSession.ConnectionID != account.AuthConnectionID || smartSession.Revision != account.AuthConnectionRevision {
+				return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "session authorization changed", nil)
+			}
+			decision = smartSession.Decision
+		} else {
+			decision = s.decideOpenAIWSUpstreamProtocol(account, firstClientMessage)
+			if !legacyBridge && wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
+				decision.Protocol, decision.Candidate, decision.Reason = "ws", "ws", "ws_ingress_unavailable"
+			}
+			if legacyBridge {
+				decision.Protocol, decision.Candidate, decision.Reason = "http", "http", "legacy_bridge"
+			}
+			smartSession = &openAISmartProtocolSession{Decision: decision, AccountID: account.ID, ConnectionID: account.AuthConnectionID, Revision: account.AuthConnectionRevision}
+		}
 		if c != nil {
 			c.Set(smartProtocolSessionKey, smartSession)
 		}
@@ -718,6 +732,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			// AfterTurn，从而覆盖 turn 级利润复核、定价冻结和并发槽位释放。
 			// Passthrough additionally lets the waiting turn consume its own
 			// response.cancel/overlap frames through the same reader.
+			hooks = s.wrapSmartProtocolHooks(ctx, account, smartSession, hooks)
 			ingressReader.setWaitFrameMode(true)
 			return s.proxyResponsesWebSocketV2Passthrough(
 				ctx,
@@ -731,6 +746,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		case OpenAIWSIngressModeHTTPBridge:
 			forceHTTPBridge = true
+			if smartSession != nil {
+				smartSession.Decision.Protocol, smartSession.Decision.Candidate, smartSession.Decision.Reason = "http", "http", "legacy_bridge"
+				smartStrict = false
+				ctx = context.WithValue(ctx, smartProtocolContextKey{}, false)
+			}
 		case OpenAIWSIngressModeCtxPool, OpenAIWSIngressModeShared, OpenAIWSIngressModeDedicated:
 			// continue
 		default:
@@ -747,32 +767,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if !forceHTTPBridge && wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
 		return fmt.Errorf("websocket ingress requires ws_v2 transport, got=%s", wsDecision.Transport)
 	}
-	if smartSession != nil {
-		prior := hooks
-		wrapped := OpenAIWSIngressHooks{}
-		if prior != nil {
-			wrapped = *prior
-		}
-		wrapped.AfterTurn = func(turn int, result *OpenAIForwardResult, err error) {
-			if result != nil {
-				result.UpstreamProtocol = smartSession.Decision.Protocol
-				result.ProtocolDecisionReason = smartSession.Decision.Reason
-				if err == nil && !result.UsageUnavailable && result.UpstreamTerminalEvent == "response.completed" {
-					effort := ""
-					if result.ReasoningEffort != nil {
-						effort = *result.ReasoningEffort
-					}
-					key := openAISmartProtocolHistoryKey{account.ID, account.AuthConnectionID, account.AuthConnectionRevision, result.UpstreamModel, effort, result.UpstreamProtocol}
-					s.smartProtocolHistory.observe(key, result.Usage.OutputTokens, time.Now())
-				}
-			}
-			if prior != nil && prior.AfterTurn != nil {
-				prior.AfterTurn(turn, result, err)
-			}
-		}
-		hooks = &wrapped
-		recordSmartProtocolDecision(ctx, smartSession.Decision)
-	}
+	hooks = s.wrapSmartProtocolHooks(ctx, account, smartSession, hooks)
 	dedicatedMode := modeRouterV2Enabled && ingressMode == OpenAIWSIngressModeDedicated
 	if hooks != nil {
 		originalHooks := hooks
@@ -1898,7 +1893,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				s.handleOpenAIWSErrorEventTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
 				statusCode := openAIWSRejectedFieldRetryHTTPStatus(upstreamMessage)
-				if !wroteDownstream && statusCode == http.StatusBadRequest && rejectedFieldRetryState != nil {
+				if !smartStrict && !wroteDownstream && statusCode == http.StatusBadRequest && rejectedFieldRetryState != nil {
 					retryBody, retryReason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(
 						statusCode,
 						payload,

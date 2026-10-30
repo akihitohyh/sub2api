@@ -187,6 +187,10 @@ func Mode(ctx context.Context, mode string) {
 }
 func (c *Collector) snapshot() Snapshot {
 	d := c.data
+	if d.ProtocolDecision != nil {
+		decision := *d.ProtocolDecision
+		d.ProtocolDecision = &decision
+	}
 	d.Routes = append([]RouteObservation(nil), d.Routes...)
 	d.Events = cloneEvents(d.Events)
 	d.Spans = append([]Span{}, d.Spans...)

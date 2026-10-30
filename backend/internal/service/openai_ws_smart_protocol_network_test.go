@@ -34,24 +34,26 @@ func (u smartProtocolNetworkHTTP) DoWithTLS(r *http.Request, p string, a int64, 
 }
 
 type smartProtocolNetwork struct {
-	t         *testing.T
-	cfg       *config.Config
-	svc       *OpenAIGatewayService
-	account   *Account
-	upstream  *httptest.Server
-	ingress   *httptest.Server
-	ctx       context.Context
-	cancel    context.CancelFunc
-	httpCalls atomic.Int32
-	wsCalls   atomic.Int32
-	active    atomic.Int32
-	mu        sync.Mutex
-	bodies    [][]byte
-	results   chan *OpenAIForwardResult
-	errors    chan error
-	timings   chan requesttiming.Snapshot
-	onTurn    func(int)
-	fail      string
+	t          *testing.T
+	cfg        *config.Config
+	svc        *OpenAIGatewayService
+	account    *Account
+	upstream   *httptest.Server
+	ingress    *httptest.Server
+	ctx        context.Context
+	cancel     context.CancelFunc
+	httpCalls  atomic.Int32
+	wsCalls    atomic.Int32
+	active     atomic.Int32
+	mu         sync.Mutex
+	bodies     [][]byte
+	results    chan *OpenAIForwardResult
+	errors     chan error
+	timings    chan requesttiming.Snapshot
+	onTurn     func(int)
+	beforeTurn func(int) error
+	toolEvents atomic.Int32
+	fail       string
 }
 
 func newSmartProtocolNetwork(t *testing.T, mode string, known bool, fail string) *smartProtocolNetwork {
@@ -128,7 +130,7 @@ func newSmartProtocolNetwork(t *testing.T, mode string, known bool, fail string)
 		f.account.Extra["openai_responses_supported"] = true
 	}
 	pool := newOpenAIWSConnPool(cfg)
-	f.svc = &OpenAIGatewayService{cfg: cfg, httpUpstream: smartProtocolNetworkHTTP{f.upstream.Client()}, cache: &stubGatewayCache{}, openaiWSResolver: NewOpenAIWSProtocolResolver(cfg), openaiWSPool: pool, openaiWSStateStore: NewOpenAIWSStateStore(nil)}
+	f.svc = &OpenAIGatewayService{cfg: cfg, httpUpstream: smartProtocolNetworkHTTP{f.upstream.Client()}, cache: &stubGatewayCache{}, openaiWSResolver: NewOpenAIWSProtocolResolver(cfg), openaiWSPool: pool, openaiWSStateStore: NewOpenAIWSStateStore(nil), toolCorrector: NewCodexToolCorrector()}
 	f.ingress = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := coderws.Accept(w, r, nil)
 		if err != nil {
@@ -146,12 +148,23 @@ func newSmartProtocolNetwork(t *testing.T, mode string, known bool, fail string)
 		c.Request = r.Clone(ctx)
 		collector := requesttiming.New(time.Now(), 0)
 		turnCtx := requesttiming.With(ctx, collector)
-		hooks := &OpenAIWSIngressHooks{AfterTurn: func(turn int, result *OpenAIForwardResult, _ error) {
+		hooks := &OpenAIWSIngressHooks{BeforeTurn: func(turn int) error {
+			f.mu.Lock()
+			hook := f.beforeTurn
+			f.mu.Unlock()
+			if hook != nil {
+				return hook(turn)
+			}
+			return nil
+		}, AfterTurn: func(turn int, result *OpenAIForwardResult, _ error) {
 			if result != nil {
 				f.results <- result
 			}
-			if f.onTurn != nil {
-				f.onTurn(turn)
+			f.mu.Lock()
+			hook := f.onTurn
+			f.mu.Unlock()
+			if hook != nil {
+				hook(turn)
 			}
 		}}
 		err = f.svc.ProxyResponsesWebSocketFromClient(turnCtx, c, conn, f.account, "synthetic-only", first, hooks)
@@ -204,6 +217,9 @@ func (f *smartProtocolNetwork) terminal(c *coderws.Conn) string {
 	for {
 		_, event, err := c.Read(f.ctx)
 		require.NoError(f.t, err)
+		if gjson.GetBytes(event, "type").String() == "response.function_call_arguments.delta" {
+			f.toolEvents.Add(1)
+		}
 		if gjson.GetBytes(event, "type").String() == "response.completed" {
 			return gjson.GetBytes(event, "response.id").String()
 		}
@@ -224,12 +240,14 @@ func TestSmartProtocolHTTPFirstSession(t *testing.T) {
 	f := newSmartProtocolNetwork(t, "auto", true, "")
 	c := f.dial()
 	changed := make(chan struct{})
+	f.mu.Lock()
 	f.onTurn = func(turn int) {
 		if turn == 1 {
 			f.cfg.Gateway.OpenAIWS.SmartProtocol.Mode = "ws"
 			close(changed)
 		}
 	}
+	f.mu.Unlock()
 	f.send(c, "first", "", 8000)
 	id := f.terminal(c)
 	<-changed
@@ -244,6 +262,7 @@ func TestSmartProtocolHTTPFirstSession(t *testing.T) {
 	require.Equal(t, "http", second.UpstreamProtocol)
 	require.EqualValues(t, 2, f.httpCalls.Load())
 	require.Zero(t, f.wsCalls.Load())
+	require.EqualValues(t, 2, f.toolEvents.Load(), "tool argument deltas reach downstream on both turns")
 	f.mu.Lock()
 	body := append([]byte(nil), f.bodies[1]...)
 	f.mu.Unlock()
@@ -308,7 +327,11 @@ func TestSmartProtocolNoReplayAndCleanup(t *testing.T) {
 					_ = c.CloseNow()
 				} else {
 					for {
-						_, _, err := c.Read(f.ctx)
+						_, body, err := c.Read(f.ctx)
+						if err == nil && gjson.GetBytes(body, "type").String() == "response.failed" {
+							_ = c.CloseNow()
+							break
+						}
 						if err != nil {
 							break
 						}
@@ -388,6 +411,34 @@ func TestSmartProtocolLegacy15MiB(t *testing.T) {
 			require.Equal(t, "http", result.UpstreamProtocol)
 			require.EqualValues(t, 1, f.httpCalls.Load())
 			require.Zero(t, f.wsCalls.Load())
+		})
+	}
+}
+
+func TestSmartProtocolTurnGuardBeforeSend(t *testing.T) {
+	for _, mode := range []string{"http", "ws"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newSmartProtocolNetwork(t, mode, true, "")
+			f.mu.Lock()
+			f.beforeTurn = func(turn int) error {
+				if turn == 2 {
+					return fmt.Errorf("synthetic turn denied")
+				}
+				return nil
+			}
+			f.mu.Unlock()
+			c := f.dial()
+			f.send(c, "first", "", 100)
+			id := f.terminal(c)
+			f.result()
+			f.send(c, "second", id, 8000)
+			for {
+				_, _, err := c.Read(f.ctx)
+				if err != nil {
+					break
+				}
+			}
+			require.EqualValues(t, 1, f.httpCalls.Load()+f.wsCalls.Load())
 		})
 	}
 }

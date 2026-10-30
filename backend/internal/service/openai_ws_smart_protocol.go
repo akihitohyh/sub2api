@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
-	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
 
@@ -36,14 +35,6 @@ type openAISmartProtocolSession struct {
 	LastResponse string
 }
 
-func smartProtocolSession(c *gin.Context) *openAISmartProtocolSession {
-	if c == nil {
-		return nil
-	}
-	v, _ := c.Get(smartProtocolSessionKey)
-	s, _ := v.(*openAISmartProtocolSession)
-	return s
-}
 func smartProtocolStrict(ctx context.Context) bool {
 	v, _ := ctx.Value(smartProtocolContextKey{}).(bool)
 	return v
@@ -119,18 +110,14 @@ func (s *OpenAIGatewayService) decideOpenAIWSUpstreamProtocol(a *Account, payloa
 		d.Samples = n
 	}
 	// A requested cap is an upper bound, not an observed output distribution.
-	if gjson.GetBytes(payload, "max_output_tokens").Int() >= int64(threshold) {
+	if d.Candidate != "http" && gjson.GetBytes(payload, "max_output_tokens").Int() >= int64(threshold) {
 		d.Candidate, d.Reason = "http", "large_output_cap"
-		if d.Source != "empirical_p90" {
-			d.Source = "heuristic_cap"
-		}
+		d.Source = "heuristic_cap"
 	}
 	effort := key.Effort
-	if (effort == "max" || effort == "xhigh") && len(gjson.GetBytes(payload, "input").Raw) >= longBytes {
+	if d.Candidate != "http" && (effort == "max" || effort == "xhigh") && len(gjson.GetBytes(payload, "input").Raw) >= longBytes {
 		d.Candidate, d.Reason = "http", "high_effort_long_context"
-		if d.Source != "empirical_p90" {
-			d.Source = "heuristic_context"
-		}
+		d.Source = "heuristic_context"
 	}
 	if mode != "shadow" {
 		d.Protocol = d.Candidate
