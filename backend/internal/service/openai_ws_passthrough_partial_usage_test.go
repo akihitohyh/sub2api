@@ -18,6 +18,7 @@ func TestSmartProtocolPassthroughPartialUsage(t *testing.T) {
 				f := newSmartProtocolNetwork(t, "ws", true, failure)
 				f.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
 				f.cfg.Gateway.OpenAIWS.IngressModeDefault = OpenAIWSIngressModePassthrough
+				f.account.Extra["openai_apikey_responses_websockets_v2_mode"] = OpenAIWSIngressModePassthrough
 				c := f.dial()
 				if prior {
 					f.send(c, "completed", "", 100)

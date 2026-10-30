@@ -128,7 +128,7 @@ func runPassthroughPartialBilling(t *testing.T, failure string, prior bool) {
 	}))
 	defer upstream.Close()
 	credentials, _ := json.Marshal(map[string]any{"api_key": "synthetic-native", "base_url": upstream.URL})
-	_, err = f.db.Exec(`UPDATE accounts SET type='apikey',credentials=$2::jsonb,extra='{"openai_responses_supported":true,"responses_websockets_v2_enabled":true}'::jsonb WHERE id=$1`, f.accountID, string(credentials))
+	_, err = f.db.Exec(`UPDATE accounts SET type='apikey',credentials=$2::jsonb,extra='{"openai_responses_supported":true,"responses_websockets_v2_enabled":true,"openai_apikey_responses_websockets_v2_mode":"passthrough"}'::jsonb WHERE id=$1`, f.accountID, string(credentials))
 	require.NoError(t, err)
 	cfg := &config.Config{}
 	cfg.Default.RateMultiplier = 1
@@ -258,5 +258,6 @@ func runPassthroughPartialBilling(t *testing.T, failure string, prior bool) {
 		wantCalls++
 	}
 	require.Equal(t, wantCalls, calls.Load(), "P1_UPSTREAM_REPLAY")
+	gateway.CloseOpenAIWSPool()
 	require.Eventually(t, func() bool { return active.Load() == 0 }, 2*time.Second, 10*time.Millisecond, "P1_UPSTREAM_NOT_CLOSED")
 }

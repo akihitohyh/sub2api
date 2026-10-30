@@ -520,6 +520,7 @@ func TestSmartProtocolPassthroughNetwork(t *testing.T) {
 			f := newSmartProtocolNetwork(t, mode, true, "")
 			f.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
 			f.cfg.Gateway.OpenAIWS.IngressModeDefault = OpenAIWSIngressModePassthrough
+			f.account.Extra["openai_apikey_responses_websockets_v2_mode"] = OpenAIWSIngressModePassthrough
 			c := f.dial()
 			f.send(c, "first", "", 8000)
 			id := f.terminal(c)
@@ -604,6 +605,7 @@ func TestSmartProtocolActualContentNetwork(t *testing.T) {
 				if path == "passthrough" {
 					f.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
 					f.cfg.Gateway.OpenAIWS.IngressModeDefault = OpenAIWSIngressModePassthrough
+					f.account.Extra["openai_apikey_responses_websockets_v2_mode"] = OpenAIWSIngressModePassthrough
 				}
 				c := f.dial()
 				f.send(c, "first", "", 100)
@@ -640,6 +642,7 @@ func TestSmartProtocolPassthroughNoReplay(t *testing.T) {
 			f := newSmartProtocolNetwork(t, "ws", true, failure)
 			f.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
 			f.cfg.Gateway.OpenAIWS.IngressModeDefault = OpenAIWSIngressModePassthrough
+			f.account.Extra["openai_apikey_responses_websockets_v2_mode"] = OpenAIWSIngressModePassthrough
 			c := f.dial()
 			f.send(c, "first", "", 100)
 			if failure == "cancel" {
