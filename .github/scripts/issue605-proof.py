@@ -60,14 +60,16 @@ with (root / 'whitelist.jsonl').open('w') as out:
                 item = {'Action': 'output', 'Output': line}
             action, test, package = item.get('Action'), item.get('Test'), item.get('Package')
             if action in ('output', 'build-output'):
-                output = item.get('Output', '')
+                # Diagnostic matching must be linear/bounded even if an existing test
+                # emits a multi-MiB synthetic frame. Never scan the full body.
+                output = item.get('Output', '')[:4096]
                 safe = {'phase': phase, 'Test': test}
-                location = re.search(r'([A-Za-z0-9_]+\.go):(\d+)(?::(\d+))?', output)
+                location = re.search(r'(?<![A-Za-z0-9_])([A-Za-z0-9_]{1,128}\.go):(\d{1,8})(?::(\d{1,8}))?', output)
                 if location:
                     safe['location'] = ':'.join(v for v in location.groups() if v)
-                compiler = re.search(r'^\s*(?:[^\s]+/)*[^\s]+\.go:\d+:\d+: (.+)', output)
+                compiler = re.search(r'(?:^|/)([A-Za-z0-9_.-]{1,128}\.go):\d{1,8}:\d{1,8}: (.{1,1000})', output)
                 if compiler:
-                    message = re.sub(r'https?://\S+|Bearer\s+\S+|sk-[\w-]+', '<redacted>', compiler.group(1))
+                    message = re.sub(r'https?://\S+|Bearer\s+\S+|sk-[\w-]+', '<redacted>', compiler.group(2))
                     safe['compiler'] = re.sub(r'"[^"\n]*"', '"<literal>"', message)[:1000]
                 found = [value for text, value in causes.items() if text in output]
                 if 'WARNING: DATA RACE' in output or 'race detected during execution' in output:

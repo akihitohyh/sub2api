@@ -78,7 +78,7 @@ jobs:
           go test -race -tags=unit ./internal/service -run '^TestOpenAIWSHTTPBridgeAcceptsFirstFrameAboveLegacy16MiB$' -count=1 -timeout=5m -json > "$RUNNER_TEMP/issue605-proof/legacy-baseline.jsonl" 2>&1
       - name: Whitelist evidence and reject skip or empty acceptance
         if: always()
-        run: python3 .github/scripts/issue605-proof.py "$RUNNER_TEMP/issue605-proof"
+        run: timeout 120s python3 .github/scripts/issue605-proof.py "$RUNNER_TEMP/issue605-proof"
       - uses: actions/upload-artifact@v6
         if: always()
         with:
