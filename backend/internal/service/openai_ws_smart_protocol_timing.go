@@ -36,7 +36,7 @@ func (s *OpenAIGatewayService) wrapSmartProtocolHooks(ctx context.Context, accou
 				available := !result.UsageUnavailable
 				usageAvailable = &available
 			}
-			requesttiming.RecordWSTurn(ctx, requesttiming.WSTurnTiming{Turn: turn, Upstream: result.UpstreamProtocol, FirstUpstreamEventMS: result.FirstUpstreamEventMs, FirstActualContentMS: result.FirstTokenMs, UsageAvailable: usageAvailable})
+			requesttiming.RecordWSTurn(ctx, requesttiming.WSTurnTiming{Turn: turn, Upstream: result.UpstreamProtocol, FirstUpstreamEventMS: result.FirstUpstreamEventMs, FirstActualContentMS: result.FirstActualContentMs, FirstActualContentKind: result.FirstActualContentKind, UsageAvailable: usageAvailable})
 			if err == nil && !result.UsageUnavailable && result.UpstreamTerminalEvent == "response.completed" {
 				effort := ""
 				if result.ReasoningEffort != nil {

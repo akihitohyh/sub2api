@@ -15,6 +15,7 @@ import (
 	coderws "github.com/coder/websocket"
 	"github.com/tidwall/gjson"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
@@ -45,6 +46,8 @@ type RelayResult struct {
 	TerminalEventType       string
 	FirstTokenMs            *int
 	FirstUpstreamEventMs    *int
+	FirstActualContentMs    *int
+	FirstActualContentKind  string
 	Duration                time.Duration
 	ClientToUpstreamFrames  int64
 	UpstreamToClientFrames  int64
@@ -52,18 +55,20 @@ type RelayResult struct {
 }
 
 type RelayTurnResult struct {
-	UsageObserved         bool
-	RequestModel          string
-	ResponseModel         string
-	ResponseModelConflict bool
-	ResponseServiceTier   string
-	Usage                 Usage
-	RequestID             string
-	TerminalEventType     string
-	StartedAt             time.Time
-	Duration              time.Duration
-	FirstTokenMs          *int
-	FirstUpstreamEventMs  *int
+	UsageObserved          bool
+	RequestModel           string
+	ResponseModel          string
+	ResponseModelConflict  bool
+	ResponseServiceTier    string
+	Usage                  Usage
+	RequestID              string
+	TerminalEventType      string
+	StartedAt              time.Time
+	Duration               time.Duration
+	FirstTokenMs           *int
+	FirstUpstreamEventMs   *int
+	FirstActualContentMs   *int
+	FirstActualContentKind string
 }
 
 type RelayExit struct {
@@ -118,6 +123,8 @@ type relayState struct {
 	terminalEventType       string
 	firstTokenMs            *int
 	firstUpstreamEventMs    *int
+	firstActualContentMs    *int
+	firstActualContentKind  string
 	turnTimingByID          map[string]*relayTurnTiming
 	activeTurn              *relayTurnTiming
 	pendingBareError        *observedUpstreamEvent
@@ -131,27 +138,31 @@ type relayExitSignal struct {
 }
 
 type observedUpstreamEvent struct {
-	usageObserved       bool
-	terminal            bool
-	eventType           string
-	responseID          string
-	usage               Usage
-	startedAt           time.Time
-	responseModel       string
-	responseConflict    bool
-	responseServiceTier string
-	duration            time.Duration
-	firstToken          *int
-	firstUpstreamEvent  *int
+	usageObserved          bool
+	terminal               bool
+	eventType              string
+	responseID             string
+	usage                  Usage
+	startedAt              time.Time
+	responseModel          string
+	responseConflict       bool
+	responseServiceTier    string
+	duration               time.Duration
+	firstToken             *int
+	firstUpstreamEvent     *int
+	firstActualContent     *int
+	firstActualContentKind string
 }
 
 type relayTurnTiming struct {
-	startAt               time.Time
-	firstTokenMs          *int
-	firstUpstreamEventMs  *int
-	firstResponseModel    string
-	terminalResponseModel string
-	responseModelConflict bool
+	startAt                time.Time
+	firstTokenMs           *int
+	firstUpstreamEventMs   *int
+	firstActualContentMs   *int
+	firstActualContentKind string
+	firstResponseModel     string
+	terminalResponseModel  string
+	responseModelConflict  bool
 	// terminalResponseServiceTier is only taken from terminal events: earlier
 	// events echo the requested tier, not the one the upstream actually used.
 	terminalResponseServiceTier string
@@ -834,6 +845,24 @@ func observeUpstreamMessage(
 			turnTiming.firstUpstreamEventMs = &ms
 		}
 	}
+	if state.firstActualContentMs == nil || (turnTiming != nil && turnTiming.firstActualContentMs == nil) {
+		if kind := openai.ResponseContentKind(message, eventType); kind != "" {
+			if state.firstActualContentMs == nil {
+				ms := int(now.Sub(startAt).Milliseconds())
+				if ms >= 0 {
+					state.firstActualContentMs = &ms
+					state.firstActualContentKind = kind
+				}
+			}
+			if turnTiming != nil && turnTiming.firstActualContentMs == nil {
+				ms := int(now.Sub(turnTiming.startAt).Milliseconds())
+				if ms >= 0 {
+					turnTiming.firstActualContentMs = &ms
+					turnTiming.firstActualContentKind = kind
+				}
+			}
+		}
+	}
 	observeRelayTurnResponseModel(turnTiming, firstRelayResponseModel(message), isTerminalEvent(eventType))
 	if !isTerminalEvent(eventType) {
 		return observed
@@ -930,6 +959,8 @@ func finalizeObservedRelayTerminal(state *relayState, observed observedUpstreamE
 			observed.duration = duration
 			observed.firstToken = openAIWSRelayCloneIntPtr(turnTiming.firstTokenMs)
 			observed.firstUpstreamEvent = openAIWSRelayCloneIntPtr(turnTiming.firstUpstreamEventMs)
+			observed.firstActualContent = openAIWSRelayCloneIntPtr(turnTiming.firstActualContentMs)
+			observed.firstActualContentKind = turnTiming.firstActualContentKind
 		}
 	} else {
 		state.consumePendingTurnStartedAt()
@@ -955,18 +986,20 @@ func emitTurnComplete(
 		requestModel = state.currentRequestModel()
 	}
 	onTurnComplete(RelayTurnResult{
-		UsageObserved:         observed.usageObserved,
-		RequestModel:          requestModel,
-		ResponseModel:         observed.responseModel,
-		ResponseModelConflict: observed.responseConflict,
-		ResponseServiceTier:   observed.responseServiceTier,
-		Usage:                 observed.usage,
-		RequestID:             responseID,
-		TerminalEventType:     observed.eventType,
-		StartedAt:             observed.startedAt,
-		Duration:              observed.duration,
-		FirstTokenMs:          openAIWSRelayCloneIntPtr(observed.firstToken),
-		FirstUpstreamEventMs:  openAIWSRelayCloneIntPtr(observed.firstUpstreamEvent),
+		UsageObserved:          observed.usageObserved,
+		RequestModel:           requestModel,
+		ResponseModel:          observed.responseModel,
+		ResponseModelConflict:  observed.responseConflict,
+		ResponseServiceTier:    observed.responseServiceTier,
+		Usage:                  observed.usage,
+		RequestID:              responseID,
+		TerminalEventType:      observed.eventType,
+		StartedAt:              observed.startedAt,
+		Duration:               observed.duration,
+		FirstTokenMs:           openAIWSRelayCloneIntPtr(observed.firstToken),
+		FirstUpstreamEventMs:   openAIWSRelayCloneIntPtr(observed.firstUpstreamEvent),
+		FirstActualContentMs:   openAIWSRelayCloneIntPtr(observed.firstActualContent),
+		FirstActualContentKind: observed.firstActualContentKind,
 	})
 }
 
@@ -1333,6 +1366,8 @@ func enrichResult(result *RelayResult, state *relayState, duration time.Duration
 	result.TerminalEventType = state.terminalEventType
 	result.FirstTokenMs = state.firstTokenMs
 	result.FirstUpstreamEventMs = state.firstUpstreamEventMs
+	result.FirstActualContentMs = state.firstActualContentMs
+	result.FirstActualContentKind = state.firstActualContentKind
 }
 
 func (s *relayState) setRequestModel(model string) {

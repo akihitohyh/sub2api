@@ -30,11 +30,12 @@ func SetProtocolDecision(ctx context.Context, d ProtocolDecision) {
 // WSTurnTiming separates arrival of any upstream event from actual content.
 // Nil means not observed. The existing timing row bounds the session to 128 turns.
 type WSTurnTiming struct {
-	Turn                 int    `json:"turn"`
-	Upstream             string `json:"upstream"`
-	FirstUpstreamEventMS *int   `json:"first_upstream_event_ms,omitempty"`
-	FirstActualContentMS *int   `json:"first_actual_content_ms,omitempty"`
-	UsageAvailable       *bool  `json:"usage_available"`
+	Turn                   int    `json:"turn"`
+	Upstream               string `json:"upstream"`
+	FirstUpstreamEventMS   *int   `json:"first_upstream_event_ms,omitempty"`
+	FirstActualContentKind string `json:"first_actual_content_kind,omitempty"`
+	FirstActualContentMS   *int   `json:"first_actual_content_ms,omitempty"`
+	UsageAvailable         *bool  `json:"usage_available"`
 }
 
 func cloneTurnTiming(t WSTurnTiming) WSTurnTiming {

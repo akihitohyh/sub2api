@@ -30,7 +30,7 @@ func TestSmartProtocolTimingAndOwnershipReadback(t *testing.T) {
 	requesttiming.Mark(timed, "ws_first_upstream_event")
 	requesttiming.Mark(timed, "ws_first_actual_content")
 	event, content := 3, 30
-	requesttiming.RecordWSTurn(timed, requesttiming.WSTurnTiming{Turn: 1, Upstream: "http", FirstUpstreamEventMS: &event, FirstActualContentMS: &content})
+	requesttiming.RecordWSTurn(timed, requesttiming.WSTurnTiming{Turn: 1, Upstream: "http", FirstUpstreamEventMS: &event, FirstActualContentMS: &content, FirstActualContentKind: "visible_text"})
 	var snapshot requesttiming.Snapshot
 	collector.WhenFinished(func(s requesttiming.Snapshot) { snapshot = s })
 	collector.Finish(200, false)
@@ -48,6 +48,7 @@ func TestSmartProtocolTimingAndOwnershipReadback(t *testing.T) {
 	require.Len(t, readback.WSTurns, 1)
 	require.Equal(t, 3, *readback.WSTurns[0].FirstUpstreamEventMS)
 	require.Equal(t, 30, *readback.WSTurns[0].FirstActualContentMS)
+	require.Equal(t, "visible_text", readback.WSTurns[0].FirstActualContentKind)
 	// Existing timing JSON without the new optional field retains unknown state.
 	snapshot = requesttiming.Snapshot{}
 	require.NoError(t, json.Unmarshal([]byte(`{"version":1,"status":200}`), &snapshot))

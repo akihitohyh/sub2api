@@ -2101,8 +2101,8 @@ func TestProxyResponsesWebSocketFromClientForGrokUsesXAIHTTPBridgeAndPreservesMa
 }
 
 func TestOpenAIWSHTTPBridgeAcceptsFirstFrameAboveLegacy16MiB(t *testing.T) {
-	// Race instrumentation scans/copies the full 17 MiB frame on hosted CPUs.
-	// Keep the real frame and streaming assertions, with a bounded CI deadline.
+	// Keep the full 17 MiB frame, a real HTTP send and terminal/usage assertions.
+	// Stage durations diagnose the prior 10s client deadline; they do not assume its cause.
 	gin.SetMode(gin.TestMode)
 
 	sseBody := strings.Join([]string{
@@ -2111,15 +2111,25 @@ func TestOpenAIWSHTTPBridgeAcceptsFirstFrameAboveLegacy16MiB(t *testing.T) {
 		`data: {"type":"response.completed","response":{"id":"resp_large_bridge","model":"gpt-5","usage":{"input_tokens":9,"output_tokens":1}}}`,
 		"",
 	}, "\n")
-	upstream := &httpUpstreamRecorder{resp: &http.Response{
-		StatusCode: http.StatusOK,
-		Header: http.Header{
-			"Content-Type": []string{"text/event-stream"},
-			"x-request-id": []string{"rid_large_bridge"},
-		},
-		Body: io.NopCloser(strings.NewReader(sseBody)),
-	}}
+	upstream := &issue605LegacyNetworkProbe{t: t, start: time.Now()}
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error("legacy loopback body read failed")
+			return
+		}
+		upstream.mark("http_received")
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" || len(raw) <= 16*1024*1024 {
+			t.Error("legacy loopback request shape failed")
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, sseBody)
+	}))
+	defer upstreamServer.Close()
+	upstream.client = upstreamServer.Client()
 	cfg := &config.Config{
+		Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{AllowInsecureHTTP: true}},
 		Gateway: config.GatewayConfig{
 			MaxLineSize: defaultMaxLineSize,
 			OpenAIWS: config.GatewayOpenAIWSConfig{
@@ -2148,7 +2158,7 @@ func TestOpenAIWSHTTPBridgeAcceptsFirstFrameAboveLegacy16MiB(t *testing.T) {
 		Type:     AccountTypeAPIKey,
 		Credentials: map[string]any{
 			"api_key":        "sk-upstream",
-			"base_url":       "https://env-openai.example/v1",
+			"base_url":       upstreamServer.URL,
 			"model_provider": "env-openai",
 		},
 		Extra: map[string]any{
@@ -2172,7 +2182,9 @@ func TestOpenAIWSHTTPBridgeAcceptsFirstFrameAboveLegacy16MiB(t *testing.T) {
 	}
 	turnOutcomeCh := make(chan turnOutcome, 1)
 	hooks := &OpenAIWSIngressHooks{
+		BeforeTurn: func(int) error { upstream.mark("before_turn"); return nil },
 		AfterTurn: func(turn int, result *OpenAIForwardResult, turnErr error) {
+			upstream.mark("after_turn")
 			turnOutcomeCh <- turnOutcome{turn: turn, result: result, err: turnErr}
 		},
 	}
@@ -2199,6 +2211,7 @@ func TestOpenAIWSHTTPBridgeAcceptsFirstFrameAboveLegacy16MiB(t *testing.T) {
 			return
 		}
 
+		upstream.mark("ingress_frame_received")
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 		req := r.Clone(r.Context())
@@ -2222,6 +2235,7 @@ func TestOpenAIWSHTTPBridgeAcceptsFirstFrameAboveLegacy16MiB(t *testing.T) {
 	err = clientConn.Write(writeCtx, coderws.MessageText, payload)
 	cancelWrite()
 	require.NoError(t, err)
+	upstream.mark("client_frame_written")
 
 	var eventTypes []string
 	for {
@@ -2239,6 +2253,7 @@ func TestOpenAIWSHTTPBridgeAcceptsFirstFrameAboveLegacy16MiB(t *testing.T) {
 	}
 	require.Contains(t, eventTypes, "response.created")
 	require.Contains(t, eventTypes, "response.completed")
+	upstream.mark("client_terminal")
 
 	require.NoError(t, clientConn.Close(coderws.StatusNormalClosure, "done"))
 	select {
@@ -2260,9 +2275,10 @@ func TestOpenAIWSHTTPBridgeAcceptsFirstFrameAboveLegacy16MiB(t *testing.T) {
 		t.Fatal("AfterTurn was not called for websocket HTTP bridge turn")
 	}
 
+	require.EqualValues(t, 1, upstream.calls.Load(), "one actual HTTP submission")
 	require.NotNil(t, upstream.lastReq)
 	require.Equal(t, http.MethodPost, upstream.lastReq.Method)
-	require.Equal(t, "https://env-openai.example/v1/responses", upstream.lastReq.URL.String())
+	require.Equal(t, upstreamServer.URL+"/v1/responses", upstream.lastReq.URL.String())
 	require.Equal(t, "env-openai", account.GetCredential("model_provider"))
 	require.Less(t, int64(len(upstream.lastBody)), cfg.Gateway.OpenAIWS.HTTPBridgeThresholdBytes)
 	require.Greater(t, len(upstream.lastBody), 16*1024*1024)

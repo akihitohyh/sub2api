@@ -1848,6 +1848,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		imageCounter := newOpenAIImageOutputCounter()
 		var firstTokenMs *int
 		var firstEventMs *int
+		var firstActualContentMs *int
+		firstActualContentKind := ""
 		reqStream := openAIWSPayloadBoolFromRaw(payload, "stream", true)
 		turnPreviousResponseID := openAIWSPayloadStringFromRaw(payload, "previous_response_id")
 		turnPreviousResponseIDKind := ClassifyOpenAIPreviousResponseIDKind(turnPreviousResponseID)
@@ -1876,7 +1878,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		defer func() {
 			if smartStrict && forwardErr != nil && forwardResult == nil {
-				forwardResult = &OpenAIForwardResult{RequestID: responseID, Usage: usage, UsageUnavailable: !usageObserved, ObservedUsageOnError: usageObserved, Model: originalModel, UpstreamModel: mappedModel, ReasoningEffort: extractOpenAIReasoningEffortFromBody(payload, mappedModel, originalModel), RequestedReasoningEffort: requestedReasoningEffort, Stream: reqStream, OpenAIWSMode: true, UpstreamProtocol: "ws", FirstTokenMs: firstTokenMs, FirstUpstreamEventMs: firstEventMs, Duration: time.Since(turnStart), streamReadIncomplete: true}
+				forwardResult = &OpenAIForwardResult{
+					RequestID: responseID, Usage: usage, UsageUnavailable: !usageObserved, ObservedUsageOnError: usageObserved,
+					Model: originalModel, UpstreamModel: mappedModel,
+					ReasoningEffort:          extractOpenAIReasoningEffortFromBody(payload, mappedModel, originalModel),
+					RequestedReasoningEffort: requestedReasoningEffort, Stream: reqStream, OpenAIWSMode: true,
+					UpstreamProtocol: "ws", FirstTokenMs: firstTokenMs, FirstUpstreamEventMs: firstEventMs,
+					FirstActualContentMs:   firstActualContentMs,
+					FirstActualContentKind: firstActualContentKind,
+					Duration:               time.Since(turnStart), streamReadIncomplete: true,
+				}
 			}
 		}()
 		for {
@@ -1910,6 +1921,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					firstEventType = eventType
 				}
 				lastEventType = eventType
+			}
+			if firstActualContentMs == nil {
+				if kind := openai.ResponseContentKind(upstreamMessage, eventType); kind != "" {
+					ms := int(time.Since(turnStart).Milliseconds())
+					firstActualContentMs = &ms
+					firstActualContentKind = kind
+					requesttiming.Mark(ctx, "ws_first_actual_content")
+				}
 			}
 			if openAIWSMessageShouldParseUsage(eventType, upstreamMessage) {
 				regionalMeterObserveUsage(ctx, upstreamMessage, eventType)
@@ -2039,7 +2058,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if firstTokenMs == nil && isTokenEvent {
 				ms := int(time.Since(turnStart).Milliseconds())
 				firstTokenMs = &ms
-				requesttiming.Mark(ctx, "ws_first_actual_content")
 			}
 			imageCounter.AddSSEData(upstreamMessage)
 
@@ -2143,6 +2161,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					Duration:                      time.Since(turnStart),
 					FirstTokenMs:                  firstTokenMs,
 					FirstUpstreamEventMs:          firstEventMs,
+					FirstActualContentMs:          firstActualContentMs,
+					FirstActualContentKind:        firstActualContentKind,
 					UpstreamProtocol:              "ws",
 				}
 				if replayInput := replayCollector.Items(); len(replayInput) > 0 {

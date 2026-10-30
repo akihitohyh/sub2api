@@ -285,6 +285,8 @@ type OpenAIForwardResult struct {
 	UpstreamProtocol         string
 	ProtocolDecisionReason   string
 	FirstUpstreamEventMs     *int
+	FirstActualContentMs     *int
+	FirstActualContentKind   string
 	// UpstreamTerminalEvent is the normalized terminal event observed on an
 	// upstream Responses WebSocket turn. Empty preserves legacy/non-WS success.
 	UpstreamTerminalEvent string

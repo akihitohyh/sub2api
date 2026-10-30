@@ -15,6 +15,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -680,6 +681,8 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
 	var firstEventMs *int
+	var firstActualContentMs *int
+	firstActualContentKind := ""
 	reqStream := openAIWSPayloadBoolFromRaw(body, "stream", true)
 	eventCount := 0
 	tokenEventCount := 0
@@ -733,6 +736,8 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			Duration:                      time.Since(turnStart),
 			FirstTokenMs:                  firstTokenMs,
 			FirstUpstreamEventMs:          firstEventMs,
+			FirstActualContentMs:          firstActualContentMs,
+			FirstActualContentKind:        firstActualContentKind,
 			UpstreamProtocol:              "http",
 		}
 		if replayInput := replayCollector.Items(); len(replayInput) > 0 {
@@ -836,12 +841,19 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			}
 			lastEventType = eventType
 		}
+		if firstActualContentMs == nil {
+			if kind := openai.ResponseContentKind(upstreamMessage, eventType); kind != "" {
+				ms := int(time.Since(turnStart).Milliseconds())
+				firstActualContentMs = &ms
+				firstActualContentKind = kind
+				requesttiming.Mark(ctx, "ws_first_actual_content")
+			}
+		}
 		if isOpenAIWSTokenEvent(eventType) {
 			tokenEventCount++
 			if firstTokenMs == nil {
 				ms := int(time.Since(turnStart).Milliseconds())
 				firstTokenMs = &ms
-				requesttiming.Mark(ctx, "ws_first_actual_content")
 			}
 		}
 		if openAIWSMessageShouldParseUsage(eventType, upstreamMessage) {

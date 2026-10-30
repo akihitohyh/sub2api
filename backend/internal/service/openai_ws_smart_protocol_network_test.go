@@ -93,7 +93,7 @@ func newSmartProtocolNetwork(t *testing.T, mode string, known bool, fail string)
 				f.wsCalls.Add(1)
 				f.remember(body)
 				for i, event := range f.events(body) {
-					if i == 1 {
+					if i == 1 || (fail == "content_prefix" && i == 4) {
 						time.Sleep(5 * time.Millisecond)
 					}
 					if err := conn.Write(ctx, coderws.MessageText, []byte(event)); err != nil {
@@ -118,7 +118,7 @@ func newSmartProtocolNetwork(t *testing.T, mode string, known bool, fail string)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		for i, event := range f.events(body) {
-			if i == 1 {
+			if i == 1 || (fail == "content_prefix" && i == 4) {
 				time.Sleep(5 * time.Millisecond)
 			}
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", event)
@@ -198,6 +198,13 @@ func (f *smartProtocolNetwork) events(body []byte) []string {
 	}
 	id := "resp_" + seed
 	events := []string{fmt.Sprintf(`{"type":"response.created","response":{"id":%q}}`, id)}
+	if f.fail == "content_prefix" {
+		events = append(events, `{"type":"response.output_text.delta","delta":""}`, `{"type":"response.metadata.delta","delta":"working"}`, `{"type":"response.output_item.added","item":{"type":"function_call","name":"lookup","arguments":""}}`)
+	}
+	if f.fail == "no_content" {
+		return append(events, `{"type":"response.output_text.delta","delta":""}`, fmt.Sprintf(`{"type":"response.completed","response":{"id":%q,"status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":0}}}`, id))
+	}
+
 	if f.fail == "partial_usage" {
 		return append(events, `{"type":"response.in_progress","response":{"id":"resp_partial","usage":{"input_tokens":3,"output_tokens":2}}}`)
 	}
@@ -570,4 +577,84 @@ func TestSmartProtocolLegacyNoReplay(t *testing.T) {
 	}
 	require.EqualValues(t, 1, f.httpCalls.Load())
 	require.Zero(t, f.wsCalls.Load())
+}
+
+func TestSmartProtocolActualContentNetwork(t *testing.T) {
+	for _, path := range []string{"http", "ws", "passthrough"} {
+		for _, failure := range []string{"content_prefix", "no_content"} {
+			t.Run(path+"_"+failure, func(t *testing.T) {
+				mode := path
+				if path == "passthrough" {
+					mode = "ws"
+				}
+				f := newSmartProtocolNetwork(t, mode, true, failure)
+				if path == "passthrough" {
+					f.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
+					f.cfg.Gateway.OpenAIWS.IngressModeDefault = OpenAIWSIngressModePassthrough
+				}
+				c := f.dial()
+				f.send(c, "first", "", 100)
+				f.terminal(c)
+				result := f.result()
+				require.NotNil(t, result.FirstUpstreamEventMs)
+				if failure == "no_content" {
+					require.Nil(t, result.FirstActualContentMs)
+					require.Empty(t, result.FirstActualContentKind)
+				} else {
+					require.NotNil(t, result.FirstTokenMs)
+					require.NotNil(t, result.FirstActualContentMs)
+					require.Less(t, *result.FirstTokenMs, *result.FirstActualContentMs, "legacy first-token keeps its original empty-delta semantics")
+					require.Equal(t, "tool_input", result.FirstActualContentKind)
+				}
+				_ = c.CloseNow()
+				select {
+				case <-f.errors:
+				case <-f.ctx.Done():
+					t.Fatal("content session cleanup stalled")
+				}
+				timing := <-f.timings
+				require.Len(t, timing.WSTurns, 1)
+				require.Equal(t, result.FirstActualContentMs, timing.WSTurns[0].FirstActualContentMS)
+				require.Equal(t, result.FirstActualContentKind, timing.WSTurns[0].FirstActualContentKind)
+			})
+		}
+	}
+}
+
+func TestSmartProtocolPassthroughNoReplay(t *testing.T) {
+	for _, failure := range []string{"eof", "event_error", "cancel"} {
+		t.Run(failure, func(t *testing.T) {
+			f := newSmartProtocolNetwork(t, "ws", true, failure)
+			f.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
+			f.cfg.Gateway.OpenAIWS.IngressModeDefault = OpenAIWSIngressModePassthrough
+			c := f.dial()
+			f.send(c, "first", "", 100)
+			if failure == "cancel" {
+				require.Eventually(t, func() bool { return f.wsCalls.Load() == 1 }, 2*time.Second, time.Millisecond)
+				_ = c.CloseNow()
+			} else {
+				for {
+					_, raw, e := c.Read(f.ctx)
+					if e != nil {
+						break
+					}
+					if gjson.GetBytes(raw, "type").String() == "response.failed" {
+						_ = c.CloseNow()
+						break
+					}
+				}
+			}
+			select {
+			case err := <-f.errors:
+				var retry *UpstreamFailoverError
+				require.False(t, errors.As(err, &retry))
+			case <-f.ctx.Done():
+				t.Fatal("passthrough cleanup stalled")
+			}
+			require.EqualValues(t, 1, f.wsCalls.Load())
+			require.Zero(t, f.httpCalls.Load())
+			f.svc.CloseOpenAIWSPool()
+			require.Eventually(t, func() bool { return f.active.Load() == 0 }, 2*time.Second, time.Millisecond)
+		})
+	}
 }

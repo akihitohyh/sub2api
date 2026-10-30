@@ -1430,6 +1430,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					Duration:                      turn.Duration,
 					FirstTokenMs:                  turn.FirstTokenMs,
 					FirstUpstreamEventMs:          turn.FirstUpstreamEventMs,
+					FirstActualContentMs:          turn.FirstActualContentMs,
+					FirstActualContentKind:        turn.FirstActualContentKind,
 					UpstreamProtocol:              "ws",
 					UsageUnavailable:              smartProtocolStrict(ctx) && !turn.UsageObserved,
 				}
@@ -1572,6 +1574,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		Duration:                      relayResult.Duration,
 		FirstTokenMs:                  relayResult.FirstTokenMs,
 		FirstUpstreamEventMs:          relayResult.FirstUpstreamEventMs,
+		FirstActualContentMs:          relayResult.FirstActualContentMs,
+		FirstActualContentKind:        relayResult.FirstActualContentKind,
 		UpstreamProtocol:              "ws",
 	}
 
