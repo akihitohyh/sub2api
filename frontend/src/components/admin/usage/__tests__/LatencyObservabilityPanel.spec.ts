@@ -17,6 +17,7 @@ describe('Issue603 latency observations', () => {
       expect(w.text()).toContain('0.0 ms (n=1)')
       expect(w.text()).toContain(`${messages.notCollected} (n=0)`)
       expect(w.text()).not.toMatch(/Client end-to-end time|Client upload before application entry|客户端端到端耗时|进入应用前的客户端上传/)
+      expect(w.find('[data-testid="reasoning-capability"]').exists()).toBe(false)
       expect(w.text()).toContain('1 / 1 (n=1)')
       expect(w.text()).toContain(messages.reasoning_first_ms)
       expect(w.text()).toContain('120.0 ms (n=1)')
@@ -40,11 +41,11 @@ describe('Issue603 latency observations', () => {
   })
 })
 
-it('Issue605 keeps reasoning capability and per-hop socket evidence explicitly unknown', async () => {
+it('omits unavailable reasoning capability and retains per-hop socket evidence scope', async () => {
   mocks.read.mockResolvedValue(result)
   const w = mount(LatencyObservabilityPanel, { props: { ops: true }, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en: { latencyObservability: en } } })] } })
   await flushPromises()
-  expect(w.get('[data-testid="reasoning-capability"]').text()).toContain('Unknown')
+  expect(w.find('[data-testid="reasoning-capability"]').exists()).toBe(false)
   expect(w.get('[data-testid="socket-evidence"]').text()).toContain('source none')
   expect(w.get('[data-testid="socket-evidence"]').text()).toContain('reverse proxy')
   expect(w.text()).toContain(en.typedScope)

@@ -20,8 +20,6 @@ import { nextTick } from 'vue'
 import en from '@/i18n/locales/en/admin/resources'
 import zh from '@/i18n/locales/zh/admin/resources'
 import UsageTable from '../UsageTable.vue'
-import enLatency from '@/i18n/locales/en/latencyObservability'
-import zhLatency from '@/i18n/locales/zh/latencyObservability'
 import enDashboard from '@/i18n/locales/en/dashboard'
 import zhDashboard from '@/i18n/locales/zh/dashboard'
 import enTiming from '@/i18n/locales/en/requestTiming'
@@ -32,9 +30,6 @@ const localizedMessages: Record<'en' | 'zh', Record<string, string>> = {
   en: {
     'requestTiming.legacyFirst': enTiming.legacyFirst,
     'requestTiming.legacyTotal': enTiming.legacyTotal,
-    'latencyObservability.reasoning_first_ms': enLatency.reasoning_first_ms,
-    'latencyObservability.visible_text_first_ms': enLatency.visible_text_first_ms,
-    'latencyObservability.response_byte_first_ms': enLatency.response_byte_first_ms,
     'usage.latencyFirstToken': enDashboard.usage.latencyFirstToken,
     'usage.latencyDuration': enDashboard.usage.latencyDuration,
     'usage.latencyTps': enDashboard.usage.latencyTps,
@@ -45,9 +40,6 @@ const localizedMessages: Record<'en' | 'zh', Record<string, string>> = {
   zh: {
     'requestTiming.legacyFirst': zhTiming.legacyFirst,
     'requestTiming.legacyTotal': zhTiming.legacyTotal,
-    'latencyObservability.reasoning_first_ms': zhLatency.reasoning_first_ms,
-    'latencyObservability.visible_text_first_ms': zhLatency.visible_text_first_ms,
-    'latencyObservability.response_byte_first_ms': zhLatency.response_byte_first_ms,
     'usage.latencyFirstToken': zhDashboard.usage.latencyFirstToken,
     'usage.latencyDuration': zhDashboard.usage.latencyDuration,
     'usage.latencyTps': zhDashboard.usage.latencyTps,
@@ -1203,43 +1195,30 @@ describe('admin UsageTable latency TPS', () => {
 })
 
 for (const [language, first, total] of [['en', 'Server TTFT', 'Server total'], ['zh', '服务端首字', '服务端总耗时']] as const) {
-  it(`Issue603 keeps the original four latency rows and removes client E2E in ${language}`, () => {
+  it(`keeps the original four latency rows and omits typed-content timing in ${language}`, () => {
     locale = language
-    const timingMessages = language === 'en' ? enTiming : zhTiming
     const dashboardMessages = language === 'en' ? enDashboard : zhDashboard
+    appStoreMocks.cachedPublicSettings = { usage_show_cache_rate: true }
     const wrapper = mount(UsageTable, {
-      props: { data: [{ ...baseImageRow, duration_ms: 1000, first_token_ms: 200 }], loading: false, columns: [{ key: 'latency', label: 'Latency' }] },
+      props: { data: [{ ...baseImageRow, image_count: 0, billing_mode: 'token', output_tokens: 100, duration_ms: 20_000, first_token_ms: 2_000, queue_wait_ms: 30_000,
+        queue_timing: { status: 'measured', source: 'ws_frame_ctx_pool', scope: 'pre_final_forward', queue_clamped: false, server_first_token_ms: 32_000, server_duration_ms: 50_000, forward_first_token_ms: 2_000, forward_duration_ms: 20_000 },
+        content_timing: { reasoning_first_ms: 120, visible_text_first_ms: 450, response_byte_first_ms: 30 } }], loading: false, columns: [{ key: 'latency', label: 'Latency' }] },
       global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
     })
     expect(wrapper.text()).toContain(first)
     expect(wrapper.text()).toContain(total)
+    expect(wrapper.text()).toContain('32.00s')
+    expect(wrapper.text()).toContain('50.00s')
     expect(wrapper.findAll('[class*="col-start-2"][class*="row-start-"]').map(node => node.text())).toEqual([
-      timingMessages.legacyFirst,
-      timingMessages.legacyTotal,
+      dashboardMessages.usage.latencyFirstToken,
+      dashboardMessages.usage.latencyDuration,
       dashboardMessages.usage.latencyTps,
       dashboardMessages.usage.latencyCacheRate,
     ])
+    expect(wrapper.find('[data-testid="typed-content-timing"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="latency-e2e-uncollected"]').exists()).toBe(false)
     wrapper.unmount()
+    appStoreMocks.cachedPublicSettings = undefined
     locale = 'en'
-  })
-}
-
-for (const language of ['en', 'zh'] as const) {
-  it(`Issue605 displays typed reasoning visible text and response byte in ${language}`, () => {
-    locale = language
-    const messages = language === 'en' ? enLatency : zhLatency
-    const row = { ...baseImageRow, content_timing: { reasoning_first_ms: 120, visible_text_first_ms: 450, response_byte_first_ms: 30, status: 'observed', source: 'httptrace_and_typed_sse', scope: 'final_http', reasoning_streaming_capability: 'unknown', capability_source: 'none' } }
-    const w = mount(UsageTable, { props: { data: [row, { ...baseImageRow, request_id: 'legacy' }], loading: false, columns: [{ key: 'latency', label: 'Latency' }] }, global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } } })
-    const cells = w.findAll('[data-testid="typed-content-timing"]')
-    expect(cells).toHaveLength(2)
-    expect(cells[0]!.text()).toContain(messages.reasoning_first_ms)
-    expect(cells[0]!.text()).toContain(messages.visible_text_first_ms)
-    expect(cells[0]!.text()).toContain(messages.response_byte_first_ms)
-    expect(cells[0]!.text()).toContain('120ms')
-    expect(cells[0]!.text()).toContain('450ms')
-    expect(cells[0]!.text()).toContain('30ms')
-    expect(cells[1]!.findAll('strong').map(n => n.text())).toEqual(['—', '—', '—'])
-    w.unmount(); locale = 'en'
   })
 }

@@ -27,8 +27,6 @@ export default {
   "visible_text_first_ms": "First visible text",
   "response_byte_first_ms": "First response byte",
   "typedScope": "Server observations from application entry, for the final physical HTTP attempt. Typed reasoning is distinct from semantic/tool events; observing it does not separate queue time from model computation. Missing historical values are —.",
-  "reasoningCapability": "Reasoning streaming capability",
-  "unknown": "Unknown",
   "socketScope": "Client ↔ server socket min RTT / retransmissions: not collected (source none; a reverse proxy may be the direct peer). Server ↔ upstream socket min RTT / retransmissions: not collected (source none; a proxy may obscure the upstream socket). Host counters are not request socket evidence.",
   "accountModel": "Account · public model",
   "textQuantiles": "Visible text p50 / p90 / p99"
