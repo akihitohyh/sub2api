@@ -1203,6 +1203,13 @@ func parseUsageAndAccumulate(
 		}
 		return Usage{}
 	}
+	// An empty object or an object with only unrelated fields is not evidence
+	// that usage was observed as zero. Leave the turn unknown so EOF/cancel does
+	// not publish a synthetic 0/0 measurement; explicit token fields (including
+	// explicit zeros) remain valid observations below.
+	if !relayUsageHasTokenEvidence(usageResult) {
+		return Usage{}
+	}
 
 	inputResult := usageResult.Get("input_tokens")
 	if !inputResult.Exists() {
@@ -1276,6 +1283,27 @@ func parseUsageAndAccumulate(
 		return Usage{}
 	}
 	return parsedUsage
+}
+
+// A usage object is evidence only when it carries at least one recognized
+// token field. total_tokens alone cannot be split into input/output billing;
+// empty or unrelated objects must stay unknown rather than become 0/0.
+func relayUsageHasTokenEvidence(usage gjson.Result) bool {
+	for _, field := range []string{
+		"input_tokens", "prompt_tokens", "output_tokens", "completion_tokens",
+		"input_tokens_details.cached_tokens", "prompt_tokens_details.cached_tokens",
+		"input_tokens_details.cache_write_tokens", "prompt_tokens_details.cache_write_tokens",
+		"input_tokens_details.cache_creation_tokens", "prompt_tokens_details.cache_creation_tokens",
+		"input_tokens_details.image_tokens", "prompt_tokens_details.image_tokens",
+		"output_tokens_details.image_tokens", "completion_tokens_details.image_tokens",
+		"cache_write_tokens", "cache_creation_input_tokens", "cache_write_input_tokens",
+		"cache_read_input_tokens", "cache_read_tokens",
+	} {
+		if usage.Get(field).Exists() {
+			return true
+		}
+	}
+	return false
 }
 
 func relayUsageHasTokens(usage Usage) bool {
