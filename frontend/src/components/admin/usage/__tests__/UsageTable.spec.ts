@@ -35,10 +35,10 @@ const localizedMessages: Record<'en' | 'zh', Record<string, string>> = {
     'latencyObservability.reasoning_first_ms': enLatency.reasoning_first_ms,
     'latencyObservability.visible_text_first_ms': enLatency.visible_text_first_ms,
     'latencyObservability.response_byte_first_ms': enLatency.response_byte_first_ms,
-    'latencyObservability.notCollected': enLatency.notCollected,
-    'latencyObservability.sourceNone': enLatency.sourceNone,
     'usage.latencyFirstToken': enDashboard.usage.latencyFirstToken,
     'usage.latencyDuration': enDashboard.usage.latencyDuration,
+    'usage.latencyTps': enDashboard.usage.latencyTps,
+    'usage.latencyCacheRate': enDashboard.usage.latencyCacheRate,
     'admin.usage.longContext': en.usage.longContext,
     'admin.usage.longContextPricingTooltip': en.usage.longContextPricingTooltip,
   },
@@ -48,10 +48,10 @@ const localizedMessages: Record<'en' | 'zh', Record<string, string>> = {
     'latencyObservability.reasoning_first_ms': zhLatency.reasoning_first_ms,
     'latencyObservability.visible_text_first_ms': zhLatency.visible_text_first_ms,
     'latencyObservability.response_byte_first_ms': zhLatency.response_byte_first_ms,
-    'latencyObservability.notCollected': zhLatency.notCollected,
-    'latencyObservability.sourceNone': zhLatency.sourceNone,
     'usage.latencyFirstToken': zhDashboard.usage.latencyFirstToken,
     'usage.latencyDuration': zhDashboard.usage.latencyDuration,
+    'usage.latencyTps': zhDashboard.usage.latencyTps,
+    'usage.latencyCacheRate': zhDashboard.usage.latencyCacheRate,
     'admin.usage.longContext': zh.usage.longContext,
     'admin.usage.longContextPricingTooltip': zh.usage.longContextPricingTooltip,
   },
@@ -197,6 +197,7 @@ describe('admin UsageTable tooltip', () => {
     expect(wrapper.text()).toContain('32.00s')
     expect(wrapper.text()).toContain('50.00s')
     expect(wrapper.text()).toContain('30.00s')
+    expect(wrapper.find('[data-testid="latency-e2e-uncollected"]').exists()).toBe(false)
   })
 
   it('PR610 keeps passthrough overlap out of the server total and retains legacy TPS', () => {
@@ -208,7 +209,7 @@ describe('admin UsageTable tooltip', () => {
     expect(wrapper.text()).toContain('50.00s')
     expect(wrapper.text()).not.toContain('62.00s')
     expect(wrapper.get('[data-testid="latency-tps"]').text()).toBe('2.0 t/s')
-    expect(wrapper.get('[data-testid="latency-e2e-uncollected"]').attributes('title')).toBe(enLatency.sourceNone)
+    expect(wrapper.find('[data-testid="latency-e2e-uncollected"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -1202,16 +1203,23 @@ describe('admin UsageTable latency TPS', () => {
 })
 
 for (const [language, first, total] of [['en', 'Server TTFT', 'Server total'], ['zh', '服务端首字', '服务端总耗时']] as const) {
-  it(`Issue603 labels real usage table server timing explicitly in ${language}`, () => {
+  it(`Issue603 keeps the original four latency rows and removes client E2E in ${language}`, () => {
     locale = language
+    const timingMessages = language === 'en' ? enTiming : zhTiming
+    const dashboardMessages = language === 'en' ? enDashboard : zhDashboard
     const wrapper = mount(UsageTable, {
       props: { data: [{ ...baseImageRow, duration_ms: 1000, first_token_ms: 200 }], loading: false, columns: [{ key: 'latency', label: 'Latency' }] },
       global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
     })
     expect(wrapper.text()).toContain(first)
     expect(wrapper.text()).toContain(total)
-    expect(wrapper.get('[data-testid="latency-e2e-uncollected"]').text()).toBe(language === 'en' ? enLatency.notCollected : zhLatency.notCollected)
-    expect(wrapper.get('[data-testid="latency-e2e-uncollected"]').attributes('title')).toBe(language === 'en' ? enLatency.sourceNone : zhLatency.sourceNone)
+    expect(wrapper.findAll('[class*="col-start-2"][class*="row-start-"]').map(node => node.text())).toEqual([
+      timingMessages.legacyFirst,
+      timingMessages.legacyTotal,
+      dashboardMessages.usage.latencyTps,
+      dashboardMessages.usage.latencyCacheRate,
+    ])
+    expect(wrapper.find('[data-testid="latency-e2e-uncollected"]').exists()).toBe(false)
     wrapper.unmount()
     locale = 'en'
   })

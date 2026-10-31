@@ -282,8 +282,6 @@
               >{{ formatUsageCacheRate(row) }}</span>
               <span v-else data-testid="latency-cache-rate" class="col-start-3 row-start-4 text-gray-400 dark:text-gray-500">-</span>
             </template>
-            <span class="col-start-2 text-gray-400 dark:text-gray-500" :class="showCacheRate ? 'row-start-5' : 'row-start-4'">{{ t('latencyObservability.e2e') }}</span>
-            <span data-testid="latency-e2e-uncollected" class="col-start-3 text-gray-400 dark:text-gray-500" :class="showCacheRate ? 'row-start-5' : 'row-start-4'" :title="t('latencyObservability.sourceNone')">{{ t('latencyObservability.notCollected') }}</span>
           </component>
         </template>
 

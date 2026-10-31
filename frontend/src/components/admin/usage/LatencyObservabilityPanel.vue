@@ -6,8 +6,6 @@
     <p data-testid="reasoning-capability" class="text-sm">{{ t('latencyObservability.reasoningCapability') }}: {{ t('latencyObservability.unknown') }} · {{ t('latencyObservability.sourceNone') }}</p>
     <p v-if="ops" data-testid="socket-evidence" class="text-xs text-gray-500">{{ t('latencyObservability.socketScope') }}</p>
     <p v-if="ops" class="text-xs text-gray-500">{{ t('latencyObservability.opsPopulation') }}</p>
-    <p data-testid="latency-e2e" class="text-sm">{{ t('latencyObservability.e2e') }}: {{ t('latencyObservability.notCollected') }} · {{ t('latencyObservability.sourceNone') }}</p>
-    <p class="text-sm">{{ t('latencyObservability.clientUpload') }}: {{ t('latencyObservability.notCollected') }}</p>
     <p v-if="loading" role="status">{{ t('common.loading') }}</p>
     <p v-else-if="error" role="alert">{{ t('latencyObservability.error') }}</p>
     <p v-else-if="!report?.groups.length">{{ t('latencyObservability.empty') }}</p>

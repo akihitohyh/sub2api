@@ -1,8 +1,6 @@
 export default {
   "title": "HTTP attempt 延迟分组",
   "scope": "应用侧观测。上传为 headers-written 到成功 request-written；semantic 内容可包含推理，visible 为可见输出。上传后等待包含网络和上游工作，不代表 prefill。额外成本为首个 send 之后各 attempt 的上传/等待组件，不是墙钟总时长或反事实节省量；历史缺失保持未采集。",
-  "e2e": "客户端端到端耗时",
-  "clientUpload": "进入应用前的客户端上传",
   "notCollected": "未采集",
   "sourceNone": "来源：无",
   "error": "延迟观测加载失败",

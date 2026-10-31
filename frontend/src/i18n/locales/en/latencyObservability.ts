@@ -1,8 +1,6 @@
 export default {
   "title": "HTTP attempt latency groups",
   "scope": "Application observations. Upload: successful headers-written to request-written. Semantic content may include reasoning; visible output is separate. Post-upload wait includes network and upstream work, and does not measure prefill. Additional costs are upload/wait components of sends after the first, never wall time or counterfactual savings. Historical gaps remain unavailable.",
-  "e2e": "Client end-to-end time",
-  "clientUpload": "Client upload before application entry",
   "notCollected": "Not collected",
   "sourceNone": "Source: none",
   "error": "Unable to load latency observations",
