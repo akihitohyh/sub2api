@@ -13,7 +13,6 @@ import (
 )
 
 const lotteryScale = int64(100000000)
-const lotteryMaxAmount = int64(1000000000) * lotteryScale
 
 type LotteryService struct {
 	client        *dbent.Client

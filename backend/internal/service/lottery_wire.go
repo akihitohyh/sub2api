@@ -20,6 +20,10 @@ func ProvideAdminService(
 	routes CompositeModelRouteRepository, resolver *CompositeRouteResolver, channels ChannelCacheInvalidator, lottery *LotteryService,
 ) AdminService {
 	s := NewAdminService(cfg, users, groups, accounts, proxies, keys, codes, rates, rpm, billing, prober, latency, auth, client, settings, assigner, subs, privacy, blocker, affiliate, routes, resolver, channels)
-	s.(*adminServiceImpl).lottery = lottery
+	impl, ok := s.(*adminServiceImpl)
+	if !ok {
+		panic("unexpected AdminService implementation")
+	}
+	impl.lottery = lottery
 	return s
 }
